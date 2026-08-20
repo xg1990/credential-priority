@@ -61,7 +61,7 @@ func (r *Runtime) runProductionTask(ctx context.Context, request TaskRequest) er
 		return err
 	}
 	plan := priority.PlanFreshOnly(credentials, evidence, priorityOptions(request.Config, now))
-	plan = withProbeFailureTemporaryDisables(plan, evidence)
+	plan = preserveProbeFailureState(plan, evidence)
 	if request.Trigger == TriggerManual {
 		result := apply.Result{Snapshot: apply.Snapshot(plan)}
 		providerEntries := runHistoryProvidersFromResult(result)
@@ -164,7 +164,7 @@ func (r *Runtime) runAutoParallelProviders(ctx context.Context, request TaskRequ
 				return
 			}
 			plan := priority.PlanFreshOnly(credentials, evidence, priorityOptions(request.Config, now))
-			plan = withProbeFailureTemporaryDisables(plan, evidence)
+			plan = preserveProbeFailureState(plan, evidence)
 			result, err := apply.Apply(ctx, apply.Request{Host: client, Auditor: r, Plan: plan, ReportSkippedPlan: true})
 			results <- providerResult{provider: provider, result: result, err: err}
 		}()
@@ -333,79 +333,37 @@ func hasProbeFailure(evidence []priority.ProbeEvidence) bool {
 	})
 }
 
-func withProbeFailureTemporaryDisables(plan priority.Plan, evidence []priority.ProbeEvidence) priority.Plan {
-	disables := probeFailureDisableChanges(plan, evidence)
-	if len(disables) == 0 {
-		return plan
-	}
-	byAuth := make(map[string]struct{}, len(disables))
-	for _, change := range disables {
-		byAuth[change.Credential.AuthIndex] = struct{}{}
-	}
-	for index := range plan.Items {
-		if _, ok := byAuth[plan.Items[index].Credential.AuthIndex]; !ok {
-			continue
-		}
-		plan.Items[index].Disabled = true
-		plan.Items[index].Reason = "failedQuotaFetch"
-	}
-	changeIndex := make(map[string]int, len(plan.Changes))
-	for index, change := range plan.Changes {
-		changeIndex[change.Credential.AuthIndex] = index
-	}
-	for _, change := range disables {
-		if existing, ok := changeIndex[change.Credential.AuthIndex]; ok {
-			plan.Changes[existing].Disabled = true
-			plan.Changes[existing].EvidenceFresh = true
-			if plan.Changes[existing].Reason == "" || plan.Changes[existing].Reason == "keep current state" {
-				plan.Changes[existing].Reason = change.Reason
-			}
-			continue
-		}
-		plan.Changes = append(plan.Changes, change)
-	}
-	return plan
-}
-
-func probeFailureDisableChanges(plan priority.Plan, evidence []priority.ProbeEvidence) []priority.Change {
-	failures := make(map[string]priority.ProbeEvidence)
+func preserveProbeFailureState(plan priority.Plan, evidence []priority.ProbeEvidence) priority.Plan {
+	failedAuthIndexes := make(map[string]struct{})
 	for _, item := range evidence {
 		if item.Status == priority.EvidenceStatusProbeFailed {
-			// xAI：无可信额度信号时必须保持现状，禁止因 probe_failed 临时禁用。
-			if item.Provider == core.ProviderXAI {
-				continue
-			}
-			failures[item.AuthIndex] = item
+			failedAuthIndexes[item.AuthIndex] = struct{}{}
 		}
 	}
-	if len(failures) == 0 {
-		return nil
+	if len(failedAuthIndexes) == 0 {
+		return plan
 	}
-	changes := make([]priority.Change, 0, len(failures))
-	for _, item := range plan.Items {
-		failure, ok := failures[item.Credential.AuthIndex]
-		if !ok {
+
+	for index := range plan.Items {
+		item := &plan.Items[index]
+		if _, failed := failedAuthIndexes[item.Credential.AuthIndex]; !failed {
 			continue
 		}
-		if item.Credential.Disabled {
-			continue
-		}
-		if filterProvider(item.Credential) == core.ProviderXAI {
-			continue
-		}
-		credential := item.Credential
-		if failure.Provider != "" {
-			credential.Provider = failure.Provider
-		}
-		changes = append(changes, priority.Change{
-			Credential:    credential,
-			Priority:      credential.Priority,
-			Disabled:      true,
-			EvidenceFresh: true,
-			Reason:        "failedQuotaFetch",
-		})
+		item.Priority = item.Credential.Priority
+		item.Disabled = item.Credential.Disabled
+		item.EvidenceFresh = false
+		item.ForceWrite = false
+		item.Reason = "failedQuotaFetch"
 	}
-	return changes
+
+	changes := plan.Changes[:0]
+	for _, change := range plan.Changes {
+		if _, failed := failedAuthIndexes[change.Credential.AuthIndex]; !failed {
+			changes = append(changes, change)
+		}
+	}
+	plan.Changes = changes
+	return plan
 }
 
 func probesForRequest(ctx context.Context, store *state.Store, credentials []core.Credential, options schedule.Options, authIndexes []string, modelGroup config.AntigravityModelGroup, trigger Trigger) ([]schedule.Probe, error) {
