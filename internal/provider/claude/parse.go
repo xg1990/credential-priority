@@ -13,26 +13,22 @@ import (
 )
 
 type claudeUsageResponse struct {
-	PlanType         any                   `json:"plan_type"`
-	Tier             any                   `json:"tier"`
-	SubscriptionType any                   `json:"subscription_type"`
-	Capabilities     []string              `json:"capabilities"`
-	RateLimits       *claudeRateLimits     `json:"rate_limits"`
-	SessionLimit     *claudeWindow         `json:"session_limit"`
-	FiveHour         *claudeWindow         `json:"five_hour"`
-	Weekly           *claudeWindow         `json:"weekly"`
-	Daily            *claudeWindow         `json:"daily"`
-	Stats            *claudeWindow         `json:"stats"`
-	UUID             string                `json:"uuid"`
-	OrganizationUUID string                `json:"organization_uuid"`
-	Error            *claudeErrorContainer `json:"error"`
+	PlanType         string            `json:"plan_type"`
+	Tier             string            `json:"tier"`
+	Capabilities     []string          `json:"capabilities"`
+	RateLimits       *claudeRateLimits `json:"rate_limits"`
+	SessionLimit     *claudeWindow     `json:"session_limit"`
+	FiveHour         *claudeWindow     `json:"five_hour"`
+	Weekly           *claudeWindow     `json:"weekly"`
+	Daily            *claudeWindow     `json:"daily"`
+	UUID             string            `json:"uuid"`
+	OrganizationUUID string            `json:"organization_uuid"`
 	claudeWindow
 }
 
 type claudeRateLimits struct {
 	SessionLimit *claudeWindow `json:"session_limit"`
 	FiveHour     *claudeWindow `json:"five_hour"`
-	FiveHourAlt  *claudeWindow `json:"5h"`
 	Weekly       *claudeWindow `json:"weekly"`
 	Daily        *claudeWindow `json:"daily"`
 	Primary      *claudeWindow `json:"primary"`
@@ -40,25 +36,15 @@ type claudeRateLimits struct {
 }
 
 type claudeWindow struct {
-	ResetsAt           any `json:"resets_at"`
-	ResetsAtCamel      any `json:"resetsAt"`
-	ResetTime          any `json:"reset_time"`
-	ResetAfterSeconds  any `json:"reset_after_seconds"`
-	LimitWindowSeconds any `json:"limit_window_seconds"`
-	Remaining          any `json:"remaining"`
-	RemainingQueries   any `json:"remaining_queries"`
-	Limit              any `json:"limit"`
-	Used               any `json:"used"`
-	UsedPercent        any `json:"used_percent"`
-	LimitReached       any `json:"limit_reached"`
-}
-
-type claudeErrorContainer struct {
-	Type          string `json:"type"`
-	Message       string `json:"message"`
-	ResetsAt      any    `json:"resets_at"`
-	ResetsAtCamel any    `json:"resetsAt"`
-	ResetTime     any    `json:"reset_time"`
+	ResetsAt          any `json:"resets_at"`
+	ResetTime         any `json:"reset_time"`
+	ResetAfterSeconds any `json:"reset_after_seconds"`
+	Remaining         any `json:"remaining"`
+	RemainingQueries  any `json:"remaining_queries"`
+	Limit             any `json:"limit"`
+	Used              any `json:"used"`
+	UsedPercent       any `json:"used_percent"`
+	LimitReached      any `json:"limit_reached"`
 }
 
 type effectiveWindow struct {
@@ -75,12 +61,9 @@ func ParseClaudeUsage(raw []byte, observedAt time.Time) ProbeResult {
 		return failedResult(observedAt, "empty claude usage response")
 	}
 
-	// 数组形态：可能为 /organizations 列表
 	if trimmed[0] == '[' {
 		var orgList []claudeUsageResponse
-		decoder := json.NewDecoder(bytes.NewReader(trimmed))
-		decoder.UseNumber()
-		if err := decoder.Decode(&orgList); err == nil && len(orgList) > 0 {
+		if err := json.Unmarshal(trimmed, &orgList); err == nil && len(orgList) > 0 {
 			for _, org := range orgList {
 				if res, ok := parseSingleUsage(org, observedAt); ok {
 					if org.UUID != "" {
@@ -102,10 +85,6 @@ func ParseClaudeUsage(raw []byte, observedAt time.Time) ProbeResult {
 		return failedResult(observedAt, "parse claude usage failed")
 	}
 
-	if usage.Error != nil {
-		return ParseClaudeRateLimitError(trimmed, nil, observedAt)
-	}
-
 	if res, ok := parseSingleUsage(usage, observedAt); ok {
 		return res
 	}
@@ -120,14 +99,12 @@ func parseSingleUsage(usage claudeUsageResponse, observedAt time.Time) (ProbeRes
 		orgUUID = usage.OrganizationUUID
 	}
 
-	// 1. 尝试从嵌套 rate_limits 提取
 	if usage.RateLimits != nil {
 		if win, ok := pickFromRateLimits(*usage.RateLimits, observedAt); ok {
 			return makeReadyResult(observedAt, win.resetAt, win.remaining, win.windowType, win.longWindowResetAt, planType, orgUUID), true
 		}
 	}
 
-	// 2. 尝试从具体命名的窗口字段提取
 	for _, candidate := range []struct {
 		win  *claudeWindow
 		wtyp WindowType
@@ -136,7 +113,6 @@ func parseSingleUsage(usage claudeUsageResponse, observedAt time.Time) (ProbeRes
 		{usage.SessionLimit, WindowFiveHour},
 		{usage.Weekly, WindowWeekly},
 		{usage.Daily, WindowDaily},
-		{usage.Stats, WindowFiveHour},
 		{&usage.claudeWindow, WindowFiveHour},
 	} {
 		if candidate.win != nil && hasWindowData(*candidate.win) {
@@ -173,7 +149,7 @@ func makeReadyResult(observedAt time.Time, resetAt *time.Time, remaining int64, 
 
 func pickFromRateLimits(limits claudeRateLimits, observedAt time.Time) (effectiveWindow, bool) {
 	var fiveHour, weekly *claudeWindow
-	for _, w := range []*claudeWindow{limits.FiveHour, limits.FiveHourAlt, limits.SessionLimit, limits.Primary} {
+	for _, w := range []*claudeWindow{limits.FiveHour, limits.SessionLimit, limits.Primary} {
 		if w != nil && hasWindowData(*w) {
 			fiveHour = w
 			break
@@ -186,47 +162,33 @@ func pickFromRateLimits(limits claudeRateLimits, observedAt time.Time) (effectiv
 		}
 	}
 
-	var fiveHourWin, weeklyWin *parsedWindow
+	var fiveHourReset, weeklyReset *time.Time
+	var fiveHourRem, weeklyRem int64
+	var okFive, okWeek bool
+
 	if fiveHour != nil {
-		if rAt := windowResetTime(observedAt, *fiveHour); rAt != nil {
-			if rem, ok := windowRemaining(*fiveHour); ok {
-				fiveHourWin = &parsedWindow{resetAt: rAt, remaining: rem}
-			}
-		}
+		fiveHourReset = windowResetTime(observedAt, *fiveHour)
+		fiveHourRem, okFive = windowRemaining(*fiveHour)
 	}
 	if weekly != nil {
-		if rAt := windowResetTime(observedAt, *weekly); rAt != nil {
-			if rem, ok := windowRemaining(*weekly); ok {
-				weeklyWin = &parsedWindow{resetAt: rAt, remaining: rem}
-			}
-		}
+		weeklyReset = windowResetTime(observedAt, *weekly)
+		weeklyRem, okWeek = windowRemaining(*weekly)
 	}
 
-	if fiveHourWin != nil && weeklyWin != nil {
-		if weeklyWin.remaining <= 0 {
-			return effectiveWindow{resetAt: weeklyWin.resetAt, remaining: 0, windowType: WindowWeekly}, true
+	if okFive && okWeek && fiveHourReset != nil && weeklyReset != nil {
+		if weeklyRem <= 0 {
+			return effectiveWindow{resetAt: weeklyReset, remaining: 0, windowType: WindowWeekly}, true
 		}
-		return effectiveWindow{
-			resetAt:           fiveHourWin.resetAt,
-			remaining:         fiveHourWin.remaining,
-			windowType:        WindowFiveHour,
-			longWindowResetAt: weeklyWin.resetAt,
-		}, true
+		return effectiveWindow{resetAt: fiveHourReset, remaining: fiveHourRem, windowType: WindowFiveHour, longWindowResetAt: weeklyReset}, true
 	}
-
-	if fiveHourWin != nil {
-		return effectiveWindow{resetAt: fiveHourWin.resetAt, remaining: fiveHourWin.remaining, windowType: WindowFiveHour}, true
+	if okFive && fiveHourReset != nil {
+		return effectiveWindow{resetAt: fiveHourReset, remaining: fiveHourRem, windowType: WindowFiveHour}, true
 	}
-	if weeklyWin != nil {
-		return effectiveWindow{resetAt: weeklyWin.resetAt, remaining: weeklyWin.remaining, windowType: WindowWeekly, longWindowResetAt: weeklyWin.resetAt}, true
+	if okWeek && weeklyReset != nil {
+		return effectiveWindow{resetAt: weeklyReset, remaining: weeklyRem, windowType: WindowWeekly, longWindowResetAt: weeklyReset}, true
 	}
 
 	return effectiveWindow{}, false
-}
-
-type parsedWindow struct {
-	resetAt   *time.Time
-	remaining int64
 }
 
 // ParseClaudeRateLimitError 解析 HTTP 429 或 rate limit error 正文与响应头。
@@ -237,9 +199,7 @@ func ParseClaudeRateLimitError(raw []byte, headers host.Header, observedAt time.
 
 	if len(raw) > 0 {
 		var generic map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		if err := decoder.Decode(&generic); err == nil {
+		if err := json.Unmarshal(raw, &generic); err == nil {
 			resetAt = extractResetFromGenericMap(generic, observedAt)
 			planType = inferPlanFromGenericMap(generic)
 		}
@@ -280,8 +240,7 @@ func extractResetFromGenericMap(m map[string]any, observedAt time.Time) *time.Ti
 			}
 		}
 	}
-
-	for _, nestedKey := range []string{"error", "rate_limit", "rate_limits", "detail", "data"} {
+	for _, nestedKey := range []string{"error", "rate_limit", "rate_limits", "detail"} {
 		if nested, ok := m[nestedKey].(map[string]any); ok {
 			if t := extractResetFromGenericMap(nested, observedAt); t != nil {
 				return t
@@ -300,7 +259,7 @@ func extractResetFromHeaders(headers host.Header, observedAt time.Time) *time.Ti
 				continue
 			}
 			switch lowerKey {
-			case "anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset", "x-ratelimit-reset", "x-ratelimit-reset-requests":
+			case "anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset", "x-ratelimit-reset":
 				if t, ok := parseTimeString(trimmed); ok {
 					return t
 				}
@@ -328,23 +287,11 @@ func inferPlanFromGenericMap(m map[string]any) core.PlanType {
 			}
 		}
 	}
-	if caps, ok := m["capabilities"].([]any); ok {
-		for _, c := range caps {
-			if s, okStr := toString(c); okStr {
-				if pt := inferPlanType(s); pt != core.PlanTypeUnknown {
-					return pt
-				}
-			}
-		}
-	}
 	return core.PlanTypeUnknown
 }
 
 func hasWindowData(window claudeWindow) bool {
 	if _, ok := parseAnyTime(window.ResetsAt); ok {
-		return true
-	}
-	if _, ok := parseAnyTime(window.ResetsAtCamel); ok {
 		return true
 	}
 	if _, ok := parseAnyTime(window.ResetTime); ok {
@@ -375,7 +322,7 @@ func hasWindowData(window claudeWindow) bool {
 }
 
 func windowResetTime(observedAt time.Time, window claudeWindow) *time.Time {
-	for _, candidate := range []any{window.ResetsAt, window.ResetsAtCamel, window.ResetTime} {
+	for _, candidate := range []any{window.ResetsAt, window.ResetTime} {
 		if resetAt, ok := parseAnyTime(candidate); ok {
 			return resetAt
 		}
@@ -418,11 +365,9 @@ func inferClaudePlanType(usage claudeUsageResponse) core.PlanType {
 			return core.PlanTypeTeam
 		}
 	}
-	for _, raw := range []any{usage.PlanType, usage.Tier, usage.SubscriptionType} {
-		if s, ok := toString(raw); ok {
-			if pt := inferPlanType(s); pt != core.PlanTypeUnknown {
-				return pt
-			}
+	for _, raw := range []string{usage.PlanType, usage.Tier} {
+		if pt := inferPlanType(raw); pt != core.PlanTypeUnknown {
+			return pt
 		}
 	}
 	return core.PlanTypeUnknown
@@ -505,16 +450,11 @@ func parseUnix(value int64) (*time.Time, bool) {
 }
 
 func toString(raw any) (string, bool) {
-	switch value := raw.(type) {
-	case string:
-		trimmed := strings.TrimSpace(value)
+	if s, ok := raw.(string); ok {
+		trimmed := strings.TrimSpace(s)
 		return trimmed, trimmed != ""
-	case json.Number:
-		trimmed := strings.TrimSpace(value.String())
-		return trimmed, trimmed != ""
-	default:
-		return "", false
 	}
+	return "", false
 }
 
 func toInt64(raw any) (int64, bool) {

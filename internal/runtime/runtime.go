@@ -173,9 +173,9 @@ func registrationResult() RegisterResult {
 		SchemaVersion: 1,
 		Metadata: Metadata{
 			Name:             config.PluginID,
-			Version:          "1.1.6",
+			Version:          "1.2.0",
 			Author:           "CPA Plugins",
-			GitHubRepository: "https://github.com/Cody292/credential-priority",
+			GitHubRepository: "https://github.com/xg1990/credential-priority",
 			Description:      "Fresh evidence based credential priority management API.",
 			ConfigFields:     configFields(),
 		},
