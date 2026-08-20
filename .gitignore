@@ -35,8 +35,3 @@ AGENTS.md
 大纲.md
 git规范.md
 草稿.md
-
-# 禁止测试资产误入发布仓库
-*_test.go
-testdata/
-**/testdata/
