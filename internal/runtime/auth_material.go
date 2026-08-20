@@ -13,12 +13,13 @@ import (
 )
 
 type authMaterial struct {
-	accessToken string
-	accountID   string
-	projectID   string
-	baseURL     string
-	authKind    string // auth_kind：oauth 时走 CLI chat-proxy 周账单
-	userID      string // 仅 sub/subject/user_id，供 x-userid
+	accessToken      string
+	accountID        string
+	projectID        string
+	baseURL          string
+	authKind         string // auth_kind：oauth 时走 CLI chat-proxy 周账单
+	userID           string // 仅 sub/subject/user_id，供 x-userid
+	organizationUUID string // organization_uuid，供 Claude provider
 }
 
 func enrichCredentialsFromAuthDocuments(ctx context.Context, client *host.Client, credentials []core.Credential) ([]core.Credential, map[string]authMaterial, error) {
@@ -36,12 +37,13 @@ func enrichCredentialsFromAuthDocuments(ctx context.Context, client *host.Client
 			enriched[index].Email = firstNonEmpty(enriched[index].Email, emailFromJSON(rawJSON))
 		}
 		materials[credential.AuthIndex] = authMaterial{
-			accessToken: accessTokenFromJSON(rawJSON),
-			accountID:   accountIDFromJSON(rawJSON),
-			projectID:   projectIDFromJSON(rawJSON),
-			baseURL:     baseURLFromJSON(rawJSON),
-			authKind:    authKindFromJSON(rawJSON),
-			userID:      userIDFromJSON(rawJSON),
+			accessToken:      accessTokenFromJSON(rawJSON),
+			accountID:        accountIDFromJSON(rawJSON),
+			projectID:        projectIDFromJSON(rawJSON),
+			baseURL:          baseURLFromJSON(rawJSON),
+			authKind:         authKindFromJSON(rawJSON),
+			userID:           userIDFromJSON(rawJSON),
+			organizationUUID: organizationUUIDFromJSON(rawJSON),
 		}
 	}
 	return enriched, materials, nil
@@ -78,11 +80,37 @@ func physicalAuthJSON(ctx context.Context, document host.AuthDocument) (json.Raw
 func accessTokenFromJSON(raw json.RawMessage) string {
 	var document struct {
 		AccessToken string `json:"access_token"`
+		SessionKey  string `json:"session_key"`
+		Token       string `json:"token"`
 	}
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return ""
 	}
-	return strings.TrimSpace(document.AccessToken)
+	for _, value := range []string{document.AccessToken, document.SessionKey, document.Token} {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func organizationUUIDFromJSON(raw json.RawMessage) string {
+	var document struct {
+		OrganizationUUID string `json:"organization_uuid"`
+		OrgUUID          string `json:"org_uuid"`
+		OrganizationID   string `json:"organization_id"`
+		OrgID            string `json:"org_id"`
+		Organization     string `json:"organization"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return ""
+	}
+	for _, value := range []string{document.OrganizationUUID, document.OrgUUID, document.OrganizationID, document.OrgID, document.Organization} {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func projectIDFromJSON(raw json.RawMessage) string {

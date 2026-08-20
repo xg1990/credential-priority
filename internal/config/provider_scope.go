@@ -28,7 +28,7 @@ func parseProviderScope(value string) (ProviderScope, error) {
 // 支持：
 //   - all / 空 → 全部提供商
 //   - selected → 旧枚举，需配合 selected_providers
-//   - antigravity / antigravity|codex|xai / 逗号分隔 → 选定提供商
+//   - antigravity / antigravity|codex|claude|xai / 逗号分隔 → 选定提供商
 func ParseProviderScopeValue(value string) (ProviderScope, []string, error) {
 	text := strings.ToLower(strings.TrimSpace(yamlText(value)))
 	if text == "" || text == string(ProviderScopeAll) {
@@ -74,8 +74,8 @@ func NormalizeSelectedProviders(values []string) ([]string, error) {
 		if provider == "" {
 			continue
 		}
-		if provider != "antigravity" && provider != "codex" && provider != "xai" {
-			return nil, invalid("selected_providers", value, "only antigravity, codex and xai are supported")
+		if provider != "antigravity" && provider != "codex" && provider != "claude" && provider != "xai" {
+			return nil, invalid("selected_providers", value, "only antigravity, codex, claude and xai are supported")
 		}
 		if _, ok := seen[provider]; ok {
 			continue

@@ -22,6 +22,8 @@ const (
 	ProviderOpenAI Provider = "openai"
 	// ProviderXAI 表示 xAI / Grok provider。
 	ProviderXAI Provider = "xai"
+	// ProviderClaude 表示 Claude / Anthropic provider。
+	ProviderClaude Provider = "claude"
 )
 
 // CredentialType 标识宿主 auth-file 的 type 字段。
@@ -44,6 +46,8 @@ const (
 	CredentialTypeOpenAI CredentialType = "openai"
 	// CredentialTypeXAI 表示 xAI 凭证类型。
 	CredentialTypeXAI CredentialType = "xai"
+	// CredentialTypeClaude 表示 Claude 凭证类型。
+	CredentialTypeClaude CredentialType = "claude"
 )
 
 // CredentialStatus 标识宿主侧凭证状态。
@@ -122,6 +126,8 @@ const (
 	StrategyAntigravity StrategyName = "antigravity"
 	// StrategyXAI 表示 xAI detector/strategy。
 	StrategyXAI StrategyName = "xai"
+	// StrategyClaude 表示 Claude detector/strategy。
+	StrategyClaude StrategyName = "claude"
 )
 
 // Credential 是 host auth-file 的排序领域模型快照。

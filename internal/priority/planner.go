@@ -12,14 +12,17 @@ const maxEnabledPriority = 999
 
 // Options 是 fresh-only 优先级规划器的已解析策略参数。
 type Options struct {
-	Now                       time.Time
-	MaxPriority               int
-	StartPriorityByProvider   map[core.Provider]int
-	CodexFreeDepletedPriority *int
-	CodexFreeDepletedDisabled *bool
-	CodexPaidDepletedDisabled *bool
-	XAIFreeDepletedPriority   *int
-	XAIFreeDepletedDisabled   *bool
+	Now                        time.Time
+	MaxPriority                int
+	StartPriorityByProvider    map[core.Provider]int
+	CodexFreeDepletedPriority  *int
+	CodexFreeDepletedDisabled  *bool
+	CodexPaidDepletedDisabled  *bool
+	ClaudeFreeDepletedPriority *int
+	ClaudeFreeDepletedDisabled *bool
+	ClaudePaidDepletedDisabled *bool
+	XAIFreeDepletedPriority    *int
+	XAIFreeDepletedDisabled    *bool
 	// XAIFreeParticipatesPriority：true 时 free 参与正优先级/free-first/uniqueness；nil/false（默认）时仅保留耗尽/冷却/401 链。
 	XAIFreeParticipatesPriority         *bool
 	XAIWeeklyDepletedPriority           *int
@@ -169,6 +172,24 @@ func initialItems(credentials []core.Credential, evidenceByAuthIndex map[string]
 				item.Priority = codexFreeDepletedPriority(options)
 				item.Disabled = credential.Disabled || codexPaidDepletedDisabled(options)
 				item.Reason = "fresh paid remaining depleted"
+			} else if isClaudeFreeDepleted(credential, evidence) {
+				item.PlanType = evidence.PlanType
+				item.ResetAt = evidence.ResetAt
+				item.Remaining = evidence.Remaining
+				item.LongWindowResetAt = evidence.LongWindowResetAt
+				item.EvidenceFresh = true
+				item.Priority = claudeFreeDepletedPriority(options)
+				item.Disabled = credential.Disabled || claudeFreeDepletedDisabled(options)
+				item.Reason = "fresh remaining depleted"
+			} else if isClaudePaidDepleted(credential, evidence) {
+				item.PlanType = evidence.PlanType
+				item.ResetAt = evidence.ResetAt
+				item.Remaining = evidence.Remaining
+				item.LongWindowResetAt = evidence.LongWindowResetAt
+				item.EvidenceFresh = true
+				item.Priority = claudeFreeDepletedPriority(options)
+				item.Disabled = credential.Disabled || claudePaidDepletedDisabled(options)
+				item.Reason = "fresh paid remaining depleted"
 			} else if isXAIFreeCooldown(credential, evidence, options) {
 				item.PlanType = evidence.PlanType
 				if item.PlanType == core.PlanTypeUnknown && evidence.XAIPlanClass == "free" {
@@ -241,6 +262,20 @@ func isCodexPaidDepleted(credential core.Credential, evidence ProbeEvidence) boo
 		*evidence.Remaining <= 0
 }
 
+func isClaudeFreeDepleted(credential core.Credential, evidence ProbeEvidence) bool {
+	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderClaude &&
+		evidence.PlanType == core.PlanTypeFree &&
+		evidence.Remaining != nil &&
+		*evidence.Remaining <= 0
+}
+
+func isClaudePaidDepleted(credential core.Credential, evidence ProbeEvidence) bool {
+	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderClaude &&
+		paidRank(evidence.PlanType) > 0 &&
+		evidence.Remaining != nil &&
+		*evidence.Remaining <= 0
+}
+
 func isAntigravityWeeklyDepleted(credential core.Credential, evidence ProbeEvidence) bool {
 	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderAntigravity &&
 		evidence.Remaining != nil &&
@@ -281,6 +316,27 @@ func codexPaidDepletedDisabled(options Options) bool {
 		return false
 	}
 	return *options.CodexPaidDepletedDisabled
+}
+
+func claudeFreeDepletedPriority(options Options) int {
+	if options.ClaudeFreeDepletedPriority == nil {
+		return -1
+	}
+	return *options.ClaudeFreeDepletedPriority
+}
+
+func claudeFreeDepletedDisabled(options Options) bool {
+	if options.ClaudeFreeDepletedDisabled == nil {
+		return true
+	}
+	return *options.ClaudeFreeDepletedDisabled
+}
+
+func claudePaidDepletedDisabled(options Options) bool {
+	if options.ClaudePaidDepletedDisabled == nil {
+		return false
+	}
+	return *options.ClaudePaidDepletedDisabled
 }
 
 func isXAICredential(credential core.Credential) bool {
@@ -588,6 +644,8 @@ func planItemProvider(item PlanItem) core.Provider {
 		return core.ProviderCodex
 	case core.CredentialTypeAntigravity:
 		return core.ProviderAntigravity
+	case core.CredentialTypeClaude:
+		return core.ProviderClaude
 	case core.CredentialTypeXAI:
 		return core.ProviderXAI
 	default:

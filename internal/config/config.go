@@ -29,7 +29,7 @@ var ErrInvalidConfig = errors.New("config: invalid")
 //
 // Enabled 为顶层插件开关；PriorityRules.Enabled 为自定义排序规则开关，二者语义独立。
 // DisabledGroupSize / DisabledProbeInterval 仍可从旧配置解析进字段，但不再驱动探测调度
-//（调度使用 Interval 与 ActiveGroupSize）。
+// （调度使用 Interval 与 ActiveGroupSize）。
 // 探测缓存路径与 freshness TTL 为包内常量，不暴露为可配置字段。
 type Config struct {
 	Enabled               bool
@@ -65,6 +65,7 @@ type PriorityRules struct {
 	Enabled     bool
 	Antigravity AntigravityPriorityRules
 	Codex       CodexPriorityRules
+	Claude      ClaudePriorityRules
 	XAI         XAIPriorityRules
 }
 
@@ -79,6 +80,15 @@ type CodexPriorityRules struct {
 	FreeDepletedPriority int
 	FreeDepletedDisabled bool
 	// PaidDepletedDisabled：Plus/Pro/Team 耗尽时是否禁用；true=禁用，false=保持启用。
+	PaidDepletedDisabled bool
+}
+
+// ClaudePriorityRules 是 Claude 排序规则的可配置部分。
+type ClaudePriorityRules struct {
+	StartPriority        int
+	FreeDepletedPriority int
+	FreeDepletedDisabled bool
+	// PaidDepletedDisabled：Pro/Team 耗尽时是否禁用；true=禁用，false=保持启用。
 	PaidDepletedDisabled bool
 }
 
@@ -124,6 +134,7 @@ type rawPriorityRules struct {
 	Enabled     *bool                   `json:"enabled"`
 	Antigravity *rawAntigravityPriority `json:"antigravity"`
 	Codex       *rawCodexPriority       `json:"codex"`
+	Claude      *rawClaudePriority      `json:"claude"`
 	XAI         *rawXAIPriority         `json:"xai"`
 	Unsupported map[string]json.RawMessage
 }
@@ -133,6 +144,14 @@ type rawAntigravityPriority struct {
 }
 
 type rawCodexPriority struct {
+	StartPriority            *int  `json:"start_priority"`
+	FreeDepletedPriority     *int  `json:"free_depleted_priority"`
+	FreeDepletedDisabled     *bool `json:"free_depleted_disabled"`
+	PaidDepletedDisabled     *bool `json:"paid_depleted_disabled"`
+	PaidDepletedKeepsEnabled *bool `json:"paid_depleted_keeps_enabled"` // 兼容旧键：true=保持启用 → disabled=false
+}
+
+type rawClaudePriority struct {
 	StartPriority            *int  `json:"start_priority"`
 	FreeDepletedPriority     *int  `json:"free_depleted_priority"`
 	FreeDepletedDisabled     *bool `json:"free_depleted_disabled"`
@@ -184,7 +203,7 @@ func (raw *rawPriorityRules) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(trimmed, &fields); err != nil {
 		return err
 	}
-	for _, allowed := range []string{"enabled", "antigravity", "codex", "xai"} {
+	for _, allowed := range []string{"enabled", "antigravity", "codex", "claude", "xai"} {
 		delete(fields, allowed)
 	}
 	*raw = rawPriorityRules(decoded)
@@ -269,6 +288,12 @@ func defaultPriorityRules() PriorityRules {
 			StartPriority: 100,
 		},
 		Codex: CodexPriorityRules{
+			StartPriority:        100,
+			FreeDepletedPriority: -1,
+			FreeDepletedDisabled: true,
+			PaidDepletedDisabled: false,
+		},
+		Claude: ClaudePriorityRules{
 			StartPriority:        100,
 			FreeDepletedPriority: -1,
 			FreeDepletedDisabled: true,
@@ -433,7 +458,7 @@ func (raw rawConfig) apply(cfg Config) (Config, error) {
 
 func (raw rawPriorityRules) apply(rules PriorityRules) (PriorityRules, error) {
 	for provider := range raw.Unsupported {
-		return PriorityRules{}, invalid("priority_rules."+provider, provider, "only antigravity, codex and xai are supported")
+		return PriorityRules{}, invalid("priority_rules."+provider, provider, "only antigravity, codex, claude and xai are supported")
 	}
 	if raw.Enabled != nil {
 		rules.Enabled = *raw.Enabled
@@ -451,6 +476,13 @@ func (raw rawPriorityRules) apply(rules PriorityRules) (PriorityRules, error) {
 			return PriorityRules{}, err
 		}
 		rules.Codex = updated
+	}
+	if raw.Claude != nil {
+		updated, err := raw.Claude.apply(rules.Claude)
+		if err != nil {
+			return PriorityRules{}, err
+		}
+		rules.Claude = updated
 	}
 	if raw.XAI != nil {
 		updated, err := raw.XAI.apply(rules.XAI)
@@ -490,6 +522,28 @@ func (raw rawCodexPriority) apply(rule CodexPriorityRules) (CodexPriorityRules, 
 	}
 	if rule.StartPriority < 1 {
 		return CodexPriorityRules{}, invalid("priority_rules.codex.start_priority", fmt.Sprint(rule.StartPriority), "must be at least 1")
+	}
+	return rule, nil
+}
+
+func (raw rawClaudePriority) apply(rule ClaudePriorityRules) (ClaudePriorityRules, error) {
+	if raw.StartPriority != nil {
+		rule.StartPriority = *raw.StartPriority
+	}
+	if raw.FreeDepletedPriority != nil {
+		rule.FreeDepletedPriority = *raw.FreeDepletedPriority
+	}
+	if raw.FreeDepletedDisabled != nil {
+		rule.FreeDepletedDisabled = *raw.FreeDepletedDisabled
+	}
+	// 新键优先；旧 keeps_enabled 取反兼容。
+	if raw.PaidDepletedDisabled != nil {
+		rule.PaidDepletedDisabled = *raw.PaidDepletedDisabled
+	} else if raw.PaidDepletedKeepsEnabled != nil {
+		rule.PaidDepletedDisabled = !*raw.PaidDepletedKeepsEnabled
+	}
+	if rule.StartPriority < 1 {
+		return ClaudePriorityRules{}, invalid("priority_rules.claude.start_priority", fmt.Sprint(rule.StartPriority), "must be at least 1")
 	}
 	return rule, nil
 }

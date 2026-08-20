@@ -21,8 +21,16 @@ func resetBoost(item PlanItem, options Options) int {
 	var resetAt *time.Time
 
 	// Antigravity / Codex / xAI：999 提权仅看 LongWindowResetAt；
-	// ResetAt 为短窗/free 冷却，不得单独制造 999。
-	if provider == core.ProviderAntigravity || provider == core.ProviderCodex || provider == core.ProviderXAI {
+	// Claude: 5h 窗口 ResetAt 或 LongWindowResetAt 临近刷新点（如 5h 窗口快到期时）均可获得 999 提权 Boost。
+	if provider == core.ProviderClaude {
+		if item.ResetAt != nil && item.ResetAt.After(options.Now) && item.ResetAt.Sub(options.Now) < options.ResetBoostWithin {
+			resetAt = item.ResetAt
+		} else if item.LongWindowResetAt != nil {
+			resetAt = item.LongWindowResetAt
+		} else {
+			resetAt = item.ResetAt
+		}
+	} else if provider == core.ProviderAntigravity || provider == core.ProviderCodex || provider == core.ProviderXAI {
 		resetAt = item.LongWindowResetAt
 	} else {
 		resetAt = item.ResetAt
@@ -31,14 +39,14 @@ func resetBoost(item PlanItem, options Options) int {
 	if resetAt == nil {
 		return 0
 	}
-	// paid：三提供商 effective ResetAt near-reset 均可提权。
-	// Free/Unknown：仅 Antigravity、Codex；禁止 xAI Free（及 xAI free 计划）。
+	// paid：各提供商 effective ResetAt near-reset 均可提权。
+	// Free/Unknown：仅 Antigravity、Codex、Claude；禁止 xAI Free（及 xAI free 计划）。
 	if paidRank(item.PlanType) == 0 {
 		provider := planItemProvider(item)
 		if provider == core.ProviderXAI || isXAIFreePlanItem(item) {
 			return 0
 		}
-		if provider != core.ProviderAntigravity && provider != core.ProviderCodex {
+		if provider != core.ProviderAntigravity && provider != core.ProviderCodex && provider != core.ProviderClaude {
 			return 0
 		}
 	}

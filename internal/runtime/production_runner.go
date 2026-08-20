@@ -224,7 +224,7 @@ func (r *Runtime) runAutoParallelProviders(ctx context.Context, request TaskRequ
 
 // runHistoryProvidersFromResult 将 apply 结果按提供商分桶，供执行记录 UI 与自动排序对齐展示。
 func runHistoryProvidersFromResult(result apply.Result) []RunHistoryProvider {
-	order := []string{string(core.ProviderAntigravity), string(core.ProviderCodex), string(core.ProviderXAI)}
+	order := []string{string(core.ProviderAntigravity), string(core.ProviderCodex), string(core.ProviderClaude), string(core.ProviderXAI)}
 	buckets := make(map[string]*RunHistoryProvider, len(order))
 	for _, name := range order {
 		buckets[name] = &RunHistoryProvider{Name: name}
@@ -266,11 +266,11 @@ func runHistoryProvidersFromResult(result apply.Result) []RunHistoryProvider {
 }
 
 func autoProvidersFromCredentials(credentials []core.Credential, cfg config.Config) []string {
-	order := []string{string(core.ProviderAntigravity), string(core.ProviderCodex), string(core.ProviderXAI)}
+	order := []string{string(core.ProviderAntigravity), string(core.ProviderCodex), string(core.ProviderClaude), string(core.ProviderXAI)}
 	present := map[string]struct{}{}
 	for _, credential := range credentials {
 		p := filterProvider(credential)
-		if p == core.ProviderAntigravity || p == core.ProviderCodex || p == core.ProviderXAI {
+		if p == core.ProviderAntigravity || p == core.ProviderCodex || p == core.ProviderClaude || p == core.ProviderXAI {
 			present[string(p)] = struct{}{}
 		}
 	}
@@ -497,7 +497,7 @@ func filterCredentialsByProvider(credentials []core.Credential, cfg config.Confi
 		filtered := make([]core.Credential, 0, len(credentials))
 		for _, credential := range credentials {
 			p := filterProvider(credential)
-			if p == core.ProviderAntigravity || p == core.ProviderCodex || p == core.ProviderXAI {
+			if p == core.ProviderAntigravity || p == core.ProviderCodex || p == core.ProviderClaude || p == core.ProviderXAI {
 				filtered = append(filtered, credential)
 			}
 		}
@@ -525,6 +525,8 @@ func filterProvider(credential core.Credential) core.Provider {
 		return core.ProviderCodex
 	case core.CredentialTypeAntigravity:
 		return core.ProviderAntigravity
+	case core.CredentialTypeClaude:
+		return core.ProviderClaude
 	case core.CredentialTypeXAI:
 		return core.ProviderXAI
 	default:
@@ -561,6 +563,9 @@ func priorityOptions(cfg config.Config, now time.Time) priority.Options {
 		freeDepletedPriority := cfg.PriorityRules.Codex.FreeDepletedPriority
 		freeDepletedDisabled := cfg.PriorityRules.Codex.FreeDepletedDisabled
 		paidDepletedDisabled := cfg.PriorityRules.Codex.PaidDepletedDisabled
+		claudeFreePriority := cfg.PriorityRules.Claude.FreeDepletedPriority
+		claudeFreeDisabled := cfg.PriorityRules.Claude.FreeDepletedDisabled
+		claudePaidDisabled := cfg.PriorityRules.Claude.PaidDepletedDisabled
 		xaiFreePriority := cfg.PriorityRules.XAI.FreeDepletedPriority
 		xaiFreeDisabled := cfg.PriorityRules.XAI.FreeDepletedDisabled
 		xaiFreeParticipates := cfg.PriorityRules.XAI.FreeParticipatesPriority
@@ -570,11 +575,15 @@ func priorityOptions(cfg config.Config, now time.Time) priority.Options {
 		options.StartPriorityByProvider = map[core.Provider]int{
 			core.ProviderAntigravity: cfg.PriorityRules.Antigravity.StartPriority,
 			core.ProviderCodex:       cfg.PriorityRules.Codex.StartPriority,
+			core.ProviderClaude:      cfg.PriorityRules.Claude.StartPriority,
 			core.ProviderXAI:         cfg.PriorityRules.XAI.StartPriority,
 		}
 		options.CodexFreeDepletedPriority = &freeDepletedPriority
 		options.CodexFreeDepletedDisabled = &freeDepletedDisabled
 		options.CodexPaidDepletedDisabled = &paidDepletedDisabled
+		options.ClaudeFreeDepletedPriority = &claudeFreePriority
+		options.ClaudeFreeDepletedDisabled = &claudeFreeDisabled
+		options.ClaudePaidDepletedDisabled = &claudePaidDisabled
 		options.XAIFreeDepletedPriority = &xaiFreePriority
 		options.XAIFreeDepletedDisabled = &xaiFreeDisabled
 		options.XAIFreeParticipatesPriority = &xaiFreeParticipates
