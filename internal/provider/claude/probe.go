@@ -43,36 +43,25 @@ func (p Prober) Probe(ctx context.Context, request ProbeRequest) ProbeResult {
 		baseURL = DefaultAPIBaseURL
 	}
 	headers := probeHeaders(request)
-
 	orgUUID := strings.TrimSpace(request.OrganizationUUID)
-	// 若未显式传入 organization_uuid，先请求 /organizations 发现组织 UUID 与套餐
-	if orgUUID == "" {
-		discoveredOrg, orgBody, respStatus, err := p.discoverOrganization(ctx, request, baseURL, headers)
-		if err != nil && respStatus == 0 {
-			return failedProbe(request, observedAt, "host http do failed")
-		}
-		if respStatus == http.StatusTooManyRequests {
-			res := ParseClaudeRateLimitError(orgBody, nil, observedAt)
-			res.Provider = providerOrDefault(request.Provider)
-			res.AuthIndex = request.AuthIndex
-			return res
-		}
-		if respStatus == http.StatusUnauthorized || respStatus == http.StatusForbidden {
-			return failedProbe(request, observedAt, fmt.Sprintf("claude probe status %d", respStatus))
-		}
-		if len(orgBody) > 0 {
-			directResult := ParseClaudeUsage(orgBody, observedAt)
-			if directResult.Status == StatusReady {
-				directResult.Provider = providerOrDefault(request.Provider)
-				directResult.AuthIndex = request.AuthIndex
-				if directResult.OrganizationUUID == "" && discoveredOrg != "" {
-					directResult.OrganizationUUID = discoveredOrg
+
+	// 如果针对 Web 前端且无 orgUUID，尝试自动发现组织
+	if orgUUID == "" && strings.Contains(baseURL, "claude.ai") {
+		if discoveredOrg, orgBody, respStatus, err := p.discoverOrganization(ctx, request, baseURL, headers); err == nil && respStatus == http.StatusOK {
+			if len(orgBody) > 0 {
+				directResult := ParseClaudeUsage(orgBody, nil, observedAt)
+				if directResult.Status == StatusReady {
+					directResult.Provider = providerOrDefault(request.Provider)
+					directResult.AuthIndex = request.AuthIndex
+					if directResult.OrganizationUUID == "" && discoveredOrg != "" {
+						directResult.OrganizationUUID = discoveredOrg
+					}
+					return directResult
 				}
-				return directResult
 			}
-		}
-		if discoveredOrg != "" {
-			orgUUID = discoveredOrg
+			if discoveredOrg != "" {
+				orgUUID = discoveredOrg
+			}
 		}
 	}
 
@@ -98,7 +87,7 @@ func (p Prober) Probe(ctx context.Context, request ProbeRequest) ProbeResult {
 		lastHeaders = resp.Headers
 
 		if resp.StatusCode == http.StatusOK && len(resp.Body) > 0 {
-			result := ParseClaudeUsage(resp.Body, observedAt)
+			result := ParseClaudeUsage(resp.Body, resp.Headers, observedAt)
 			if result.Status == StatusReady {
 				result.Provider = providerOrDefault(request.Provider)
 				result.AuthIndex = request.AuthIndex
@@ -190,19 +179,30 @@ func (p Prober) discoverOrganization(ctx context.Context, request ProbeRequest, 
 func probeCandidateURLs(baseURL string, orgUUID string) []string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	urls := make([]string, 0, 4)
-	if orgUUID != "" {
-		urls = append(urls,
-			fmt.Sprintf("%s/organizations/%s/usage", base, orgUUID),
-			fmt.Sprintf("%s/organizations/%s/rate_limits", base, orgUUID),
-			fmt.Sprintf("%s/organizations/%s/stats", base, orgUUID),
-			fmt.Sprintf("%s/organizations/%s", base, orgUUID),
-		)
+
+	// 若为官方 API 或通用 API 形式，优先请求 /v1/models
+	if strings.Contains(base, "api.anthropic.com") || !strings.Contains(base, "claude.ai") {
+		urls = append(urls, base+"/v1/models")
+		if orgUUID != "" {
+			urls = append(urls, fmt.Sprintf("%s/organizations/%s/usage", base, orgUUID))
+		}
+		urls = append(urls, base+"/v1/messages")
 	} else {
-		urls = append(urls,
-			base+"/organizations/usage",
-			base+"/organizations/rate_limits",
-			base+"/usage",
-		)
+		// 网页端或反代 API 形式
+		if orgUUID != "" {
+			urls = append(urls,
+				fmt.Sprintf("%s/organizations/%s/usage", base, orgUUID),
+				fmt.Sprintf("%s/organizations/%s/rate_limits", base, orgUUID),
+				fmt.Sprintf("%s/organizations/%s/stats", base, orgUUID),
+				fmt.Sprintf("%s/organizations/%s", base, orgUUID),
+			)
+		} else {
+			urls = append(urls,
+				base+"/organizations",
+				base+"/organizations/usage",
+				base+"/usage",
+			)
+		}
 	}
 	return urls
 }
@@ -213,10 +213,14 @@ func probeHeaders(request ProbeRequest) host.Header {
 		token = accessToken
 	}
 	headers := host.Header{
-		"Accept":        []string{"application/json"},
-		"Content-Type":  []string{"application/json"},
-		"User-Agent":    []string{"claude-code/0.2.29 (darwin; arm64)"},
-		"Authorization": []string{"Bearer " + token},
+		"Accept":            []string{"application/json"},
+		"Content-Type":      []string{"application/json"},
+		"User-Agent":        []string{"claude-code/0.2.29 (darwin; arm64)"},
+		"Anthropic-Version": []string{"2023-06-01"},
+		"Authorization":     []string{"Bearer " + token},
+	}
+	if strings.HasPrefix(token, "sk-ant-api") {
+		headers["X-Api-Key"] = []string{token}
 	}
 	if strings.HasPrefix(token, "sk-ant-sid") || strings.HasPrefix(token, "sessionKey=") {
 		cookieVal := token

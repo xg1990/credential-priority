@@ -23,6 +23,7 @@ type claudeUsageResponse struct {
 	Daily            *claudeWindow     `json:"daily"`
 	UUID             string            `json:"uuid"`
 	OrganizationUUID string            `json:"organization_uuid"`
+	Data             []any             `json:"data"`
 	claudeWindow
 }
 
@@ -55,12 +56,15 @@ type effectiveWindow struct {
 }
 
 // ParseClaudeUsage 将 Claude 响应 JSON 解析为可信额度 fresh probe 结果。
-func ParseClaudeUsage(raw []byte, observedAt time.Time) ProbeResult {
+func ParseClaudeUsage(raw []byte, headers host.Header, observedAt time.Time) ProbeResult {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return failedResult(observedAt, "empty claude usage response")
 	}
 
+	orgUUIDFromHeader := extractOrgFromHeaders(headers)
+
+	// 1. 数组形态：可能为 /organizations 列表
 	if trimmed[0] == '[' {
 		var orgList []claudeUsageResponse
 		if err := json.Unmarshal(trimmed, &orgList); err == nil && len(orgList) > 0 {
@@ -70,6 +74,8 @@ func ParseClaudeUsage(raw []byte, observedAt time.Time) ProbeResult {
 						res.OrganizationUUID = org.UUID
 					} else if org.OrganizationUUID != "" {
 						res.OrganizationUUID = org.OrganizationUUID
+					} else if orgUUIDFromHeader != "" {
+						res.OrganizationUUID = orgUUIDFromHeader
 					}
 					return res
 				}
@@ -85,8 +91,27 @@ func ParseClaudeUsage(raw []byte, observedAt time.Time) ProbeResult {
 		return failedResult(observedAt, "parse claude usage failed")
 	}
 
+	// 2. 尝试从标准 usage/rate_limit 字段解析
 	if res, ok := parseSingleUsage(usage, observedAt); ok {
+		if res.OrganizationUUID == "" && orgUUIDFromHeader != "" {
+			res.OrganizationUUID = orgUUIDFromHeader
+		}
 		return res
+	}
+
+	// 3. 检查是否为 /v1/models 响应（官方 API 凭据有效性证据）
+	if len(usage.Data) > 0 {
+		// 默认 5 小时后刷新，假定额度可用（100）
+		defaultReset := observedAt.UTC().Add(5 * time.Hour)
+		planType := core.PlanTypePro
+		orgUUID := usage.UUID
+		if orgUUID == "" {
+			orgUUID = usage.OrganizationUUID
+		}
+		if orgUUID == "" {
+			orgUUID = orgUUIDFromHeader
+		}
+		return makeReadyResult(observedAt, &defaultReset, 100, WindowFiveHour, nil, planType, orgUUID)
 	}
 
 	return failedResult(observedAt, "trusted claude quota window unavailable")
@@ -179,7 +204,12 @@ func pickFromRateLimits(limits claudeRateLimits, observedAt time.Time) (effectiv
 		if weeklyRem <= 0 {
 			return effectiveWindow{resetAt: weeklyReset, remaining: 0, windowType: WindowWeekly}, true
 		}
-		return effectiveWindow{resetAt: fiveHourReset, remaining: fiveHourRem, windowType: WindowFiveHour, longWindowResetAt: weeklyReset}, true
+		return effectiveWindow{
+			resetAt:           fiveHourReset,
+			remaining:         fiveHourRem,
+			windowType:        WindowFiveHour,
+			longWindowResetAt: weeklyReset,
+		}, true
 	}
 	if okFive && fiveHourReset != nil {
 		return effectiveWindow{resetAt: fiveHourReset, remaining: fiveHourRem, windowType: WindowFiveHour}, true
@@ -194,14 +224,17 @@ func pickFromRateLimits(limits claudeRateLimits, observedAt time.Time) (effectiv
 // ParseClaudeRateLimitError 解析 HTTP 429 或 rate limit error 正文与响应头。
 func ParseClaudeRateLimitError(raw []byte, headers host.Header, observedAt time.Time) ProbeResult {
 	var resetAt *time.Time
-	planType := core.PlanTypeUnknown
+	planType := core.PlanTypePro
 	zeroRemaining := int64(0)
+	orgUUIDFromHeader := extractOrgFromHeaders(headers)
 
 	if len(raw) > 0 {
 		var generic map[string]any
 		if err := json.Unmarshal(raw, &generic); err == nil {
 			resetAt = extractResetFromGenericMap(generic, observedAt)
-			planType = inferPlanFromGenericMap(generic)
+			if pt := inferPlanFromGenericMap(generic); pt != core.PlanTypeUnknown {
+				planType = pt
+			}
 		}
 	}
 
@@ -215,17 +248,35 @@ func ParseClaudeRateLimitError(raw []byte, headers host.Header, observedAt time.
 	}
 
 	return ProbeResult{
-		Provider:    core.ProviderClaude,
-		ObservedAt:  observedAt.UTC(),
-		ResetAt:     resetAt,
-		Remaining:   &zeroRemaining,
-		Window:      WindowFiveHour,
-		Freshness:   core.FreshnessFresh,
-		ProbeStatus: core.ProbeStatusReady,
-		Status:      StatusReady,
-		PlanType:    planType,
-		Error:       "rate limit reached",
+		Provider:         core.ProviderClaude,
+		AuthIndex:        "",
+		ObservedAt:       observedAt.UTC(),
+		ResetAt:          resetAt,
+		Remaining:        &zeroRemaining,
+		Window:           WindowFiveHour,
+		Freshness:        core.FreshnessFresh,
+		ProbeStatus:      core.ProbeStatusReady,
+		Status:           StatusReady,
+		PlanType:         planType,
+		OrganizationUUID: orgUUIDFromHeader,
+		Error:            "rate limit reached",
 	}
+}
+
+func extractOrgFromHeaders(headers host.Header) string {
+	if headers == nil {
+		return ""
+	}
+	for key, values := range headers {
+		if strings.EqualFold(strings.TrimSpace(key), "anthropic-organization-id") {
+			for _, val := range values {
+				if trimmed := strings.TrimSpace(val); trimmed != "" {
+					return trimmed
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func extractResetFromGenericMap(m map[string]any, observedAt time.Time) *time.Time {
@@ -281,6 +332,15 @@ func inferPlanFromGenericMap(m map[string]any) core.PlanType {
 	for _, key := range []string{"plan_type", "plan", "tier", "subscription"} {
 		if v, ok := m[key]; ok {
 			if s, okStr := toString(v); okStr {
+				if pt := inferPlanType(s); pt != core.PlanTypeUnknown {
+					return pt
+				}
+			}
+		}
+	}
+	if caps, ok := m["capabilities"].([]any); ok {
+		for _, c := range caps {
+			if s, okStr := toString(c); okStr {
 				if pt := inferPlanType(s); pt != core.PlanTypeUnknown {
 					return pt
 				}

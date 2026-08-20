@@ -24,7 +24,7 @@ func TestParseClaudeUsage_StandardSessionLimit(t *testing.T) {
 		}
 	}`
 
-	result := ParseClaudeUsage([]byte(payload), observedAt)
+	result := ParseClaudeUsage([]byte(payload), nil, observedAt)
 	if result.Status != StatusReady {
 		t.Fatalf("expected StatusReady, got %v (err: %s)", result.Status, result.Error)
 	}
@@ -66,7 +66,7 @@ func TestParseClaudeUsage_FiveHourAndWeeklyWindows(t *testing.T) {
 		}
 	}`
 
-	result := ParseClaudeUsage([]byte(payload), observedAt)
+	result := ParseClaudeUsage([]byte(payload), nil, observedAt)
 	if result.Status != StatusReady {
 		t.Fatalf("expected StatusReady, got %v", result.Status)
 	}
@@ -105,7 +105,7 @@ func TestParseClaudeUsage_FiveHourDepleted(t *testing.T) {
 		}
 	}`
 
-	result := ParseClaudeUsage([]byte(payload), observedAt)
+	result := ParseClaudeUsage([]byte(payload), nil, observedAt)
 	if result.Status != StatusReady {
 		t.Fatalf("expected StatusReady, got %v", result.Status)
 	}
@@ -140,7 +140,7 @@ func TestParseClaudeUsage_WeeklyDepleted(t *testing.T) {
 		}
 	}`
 
-	result := ParseClaudeUsage([]byte(payload), observedAt)
+	result := ParseClaudeUsage([]byte(payload), nil, observedAt)
 	if result.Status != StatusReady {
 		t.Fatalf("expected StatusReady, got %v", result.Status)
 	}
@@ -152,6 +152,25 @@ func TestParseClaudeUsage_WeeklyDepleted(t *testing.T) {
 	}
 	if result.ResetAt == nil || !result.ResetAt.Equal(weeklyReset) {
 		t.Errorf("expected resetAt %v, got %v", weeklyReset, result.ResetAt)
+	}
+}
+
+func TestParseClaudeUsage_V1ModelsResponse(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	payload := `{"data":[{"type":"model","id":"claude-opus-5"},{"type":"model","id":"claude-sonnet-5"}],"has_more":false}`
+	headers := host.Header{
+		"anthropic-organization-id": []string{"org-model-uuid-999"},
+	}
+
+	result := ParseClaudeUsage([]byte(payload), headers, observedAt)
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v", result.Status)
+	}
+	if result.OrganizationUUID != "org-model-uuid-999" {
+		t.Errorf("expected org uuid org-model-uuid-999, got %s", result.OrganizationUUID)
+	}
+	if result.Remaining == nil || *result.Remaining <= 0 {
+		t.Errorf("expected positive remaining, got %v", result.Remaining)
 	}
 }
 
@@ -174,7 +193,7 @@ func TestParseClaudeUsage_OrganizationsArray(t *testing.T) {
 		}
 	]`
 
-	result := ParseClaudeUsage([]byte(payload), observedAt)
+	result := ParseClaudeUsage([]byte(payload), nil, observedAt)
 	if result.Status != StatusReady {
 		t.Fatalf("expected StatusReady, got %v", result.Status)
 	}
@@ -204,7 +223,7 @@ func TestParseClaudeUsage_TeamPlan(t *testing.T) {
 		}
 	}`
 
-	result := ParseClaudeUsage([]byte(payload), observedAt)
+	result := ParseClaudeUsage([]byte(payload), nil, observedAt)
 	if result.Status != StatusReady {
 		t.Fatalf("expected StatusReady, got %v", result.Status)
 	}
@@ -263,12 +282,12 @@ func TestParseClaudeRateLimitError_Headers(t *testing.T) {
 func TestParseClaudeUsage_CorruptOrEmpty(t *testing.T) {
 	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 
-	resEmpty := ParseClaudeUsage([]byte(""), observedAt)
+	resEmpty := ParseClaudeUsage([]byte(""), nil, observedAt)
 	if resEmpty.Status != StatusProbeFailed {
 		t.Errorf("expected StatusProbeFailed for empty body, got %v", resEmpty.Status)
 	}
 
-	resCorrupt := ParseClaudeUsage([]byte("{invalid json"), observedAt)
+	resCorrupt := ParseClaudeUsage([]byte("{invalid json"), nil, observedAt)
 	if resCorrupt.Status != StatusProbeFailed {
 		t.Errorf("expected StatusProbeFailed for corrupt body, got %v", resCorrupt.Status)
 	}

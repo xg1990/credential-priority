@@ -6,11 +6,11 @@ import (
 	"credential-priority/internal/core"
 )
 
-// DefaultAPIBaseURL 是 Claude 官方 Web API 根路径。
-const DefaultAPIBaseURL = "https://claude.ai/api"
+// DefaultAPIBaseURL 是 Anthropic 官方 API 根路径。
+const DefaultAPIBaseURL = "https://api.anthropic.com"
 
-// DefaultAnthropicBaseURL 是 Anthropic 官方 API 根路径。
-const DefaultAnthropicBaseURL = "https://api.anthropic.com"
+// DefaultWebBaseURL 是 Claude 官方 Web API 根路径（备选）。
+const DefaultWebBaseURL = "https://claude.ai/api"
 
 // WindowType 标识 Claude 额度响应中的窗口类型。
 type WindowType string

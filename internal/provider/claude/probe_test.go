@@ -35,6 +35,43 @@ func (c fixedClock) Now() time.Time {
 	return c.now
 }
 
+func TestProber_Probe_V1ModelsDefaultSuccess(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	modelsJSON := `{"data":[{"type":"model","id":"claude-opus-5"},{"type":"model","id":"claude-sonnet-5"}],"has_more":false}`
+
+	mock := mockHostDoer{
+		handler: func(req host.HTTPRequest) (host.HTTPResponse, error) {
+			if strings.HasSuffix(req.URL, "/v1/models") {
+				return host.HTTPResponse{
+					StatusCode: http.StatusOK,
+					Headers: host.Header{
+						"anthropic-organization-id": []string{"org-model-123"},
+					},
+					Body: []byte(modelsJSON),
+				}, nil
+			}
+			return host.HTTPResponse{StatusCode: http.StatusNotFound}, nil
+		},
+	}
+
+	prober := NewProber(mock, fixedClock{now: now})
+	result := prober.Probe(context.Background(), ProbeRequest{
+		Provider:    core.ProviderClaude,
+		AuthIndex:   "auth_claude_models",
+		AccessToken: "test-token",
+	})
+
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v (err: %s)", result.Status, result.Error)
+	}
+	if result.OrganizationUUID != "org-model-123" {
+		t.Errorf("expected org-model-123, got %v", result.OrganizationUUID)
+	}
+	if result.Remaining == nil || *result.Remaining <= 0 {
+		t.Errorf("expected positive remaining, got %v", result.Remaining)
+	}
+}
+
 func TestProber_Probe_DirectOrgSuccess(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	resetAt := time.Date(2026, 8, 20, 15, 0, 0, 0, time.UTC)
@@ -68,6 +105,7 @@ func TestProber_Probe_DirectOrgSuccess(t *testing.T) {
 		AuthIndex:        "auth_claude_1",
 		AccessToken:      "test-token",
 		OrganizationUUID: "org-xyz-123",
+		BaseURL:          DefaultWebBaseURL,
 	})
 
 	if result.Status != StatusReady {
@@ -139,6 +177,7 @@ func TestProber_Probe_DiscoverOrganization(t *testing.T) {
 		Provider:    core.ProviderClaude,
 		AuthIndex:   "auth_claude_2",
 		AccessToken: "test-token-2",
+		BaseURL:     DefaultWebBaseURL,
 	})
 
 	if result.Status != StatusReady {
