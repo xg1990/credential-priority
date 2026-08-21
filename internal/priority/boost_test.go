@@ -94,6 +94,66 @@ func TestResetBoost_Claude(t *testing.T) {
 	}
 }
 
+func TestResetBoost_AntigravityAndCodexShortWindow(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	nearReset := now.Add(2 * time.Hour)
+	farLongWindow := now.Add(48 * time.Hour)
+
+	options := Options{
+		Now:              now,
+		ResetBoostWithin: 24 * time.Hour,
+		ResetBoost:       50,
+	}
+
+	tests := []struct {
+		name     string
+		provider core.Provider
+		item     PlanItem
+		expected int
+	}{
+		{
+			name:     "antigravity near 5h reset with far weekly window",
+			provider: core.ProviderAntigravity,
+			item: PlanItem{
+				PlanType:          core.PlanTypePro,
+				ResetAt:           &nearReset,
+				LongWindowResetAt: &farLongWindow,
+			},
+			expected: 50,
+		},
+		{
+			name:     "codex near 5h reset with far weekly window",
+			provider: core.ProviderCodex,
+			item: PlanItem{
+				PlanType:          core.PlanTypePro,
+				ResetAt:           &nearReset,
+				LongWindowResetAt: &farLongWindow,
+			},
+			expected: 50,
+		},
+		{
+			name:     "xai near 5h reset with far weekly window stays unboosted",
+			provider: core.ProviderXAI,
+			item: PlanItem{
+				PlanType:          core.PlanTypePro,
+				ResetAt:           &nearReset,
+				LongWindowResetAt: &farLongWindow,
+			},
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.item.Credential = core.Credential{Provider: tt.provider}
+			got := resetBoost(tt.item, options)
+			if got != tt.expected {
+				t.Errorf("resetBoost() = %d, expected %d", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestPlannedPriority_Claude(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	nearReset := now.Add(1 * time.Hour)

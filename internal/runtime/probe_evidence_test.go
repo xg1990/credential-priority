@@ -11,6 +11,7 @@ import (
 	"credential-priority/internal/core"
 	"credential-priority/internal/host"
 	"credential-priority/internal/priority"
+	"credential-priority/internal/provider/antigravity"
 	"credential-priority/internal/provider/claude"
 	"credential-priority/internal/schedule"
 	"credential-priority/internal/state"
@@ -78,6 +79,52 @@ func TestRecordClaudeProbeResult_SuccessAndFailure(t *testing.T) {
 	}
 	if evFail.Status != priority.EvidenceStatusProbeFailed {
 		t.Errorf("expected EvidenceStatusProbeFailed, got %v", evFail.Status)
+	}
+}
+
+func TestRecordAntigravityProbeResult_PersistsLongWindowResetAt(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cpa-antigravity-evidence-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cachePath := filepath.Join(tempDir, "refresh-cache.json")
+	store, err := state.Load(context.Background(), cachePath)
+	if err != nil {
+		t.Fatalf("state.Load failed: %v", err)
+	}
+
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(3 * time.Hour)
+	longWindowResetAt := now.Add(48 * time.Hour)
+	rem := int64(40)
+
+	result := antigravity.ProbeResult{
+		Provider:          core.ProviderAntigravity,
+		AuthIndex:         "auth-antigravity-1",
+		ModelGroup:        antigravity.ModelGroupClaudeGPT,
+		ObservedAt:        now,
+		ResetAt:           &resetAt,
+		LongWindowResetAt: &longWindowResetAt,
+		Remaining:         &rem,
+		Window:            antigravity.WindowFiveHour,
+		Freshness:         core.FreshnessFresh,
+		ProbeStatus:       core.ProbeStatusReady,
+		Status:            antigravity.StatusReady,
+		PlanType:          core.PlanTypePro,
+	}
+
+	if _, err := recordAntigravityProbeResult(context.Background(), store, result, now); err != nil {
+		t.Fatalf("recordAntigravityProbeResult failed: %v", err)
+	}
+
+	entry, ok := store.GetEntry("auth-antigravity-1", string(antigravity.ModelGroupClaudeGPT))
+	if !ok {
+		t.Fatalf("expected persisted entry for auth-antigravity-1")
+	}
+	if !entry.LongWindowResetAt.Equal(longWindowResetAt) {
+		t.Errorf("expected persisted LongWindowResetAt %v, got %v", longWindowResetAt, entry.LongWindowResetAt)
 	}
 }
 
