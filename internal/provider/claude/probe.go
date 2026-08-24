@@ -65,6 +65,41 @@ func (p Prober) Probe(ctx context.Context, request ProbeRequest) ProbeResult {
 		}
 	}
 
+	// 对于 API 接口（非 claude.ai 网页端），优先执行轻量 /v1/messages POST 微探测以获取精确 Unified RateLimit Headers
+	if !strings.Contains(baseURL, "claude.ai") {
+		microReqBody := []byte(`{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`)
+		resp, err := p.doRequest(ctx, host.HTTPRequest{
+			AuthIndex: request.AuthIndex,
+			Method:    http.MethodPost,
+			URL:       baseURL + "/v1/messages",
+			Headers:   headers,
+			Body:      microReqBody,
+		})
+		if err == nil {
+			if resp.StatusCode == http.StatusOK {
+				result := ParseClaudeUsage(resp.Body, resp.Headers, observedAt)
+				if result.Status == StatusReady {
+					result.Provider = providerOrDefault(request.Provider)
+					result.AuthIndex = request.AuthIndex
+					if result.OrganizationUUID == "" && orgUUID != "" {
+						result.OrganizationUUID = orgUUID
+					}
+					return result
+				}
+			} else if resp.StatusCode == http.StatusTooManyRequests {
+				result := ParseClaudeRateLimitError(resp.Body, resp.Headers, observedAt)
+				result.Provider = providerOrDefault(request.Provider)
+				result.AuthIndex = request.AuthIndex
+				if result.OrganizationUUID == "" && orgUUID != "" {
+					result.OrganizationUUID = orgUUID
+				}
+				return result
+			} else if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+				return failedProbe(request, observedAt, fmt.Sprintf("claude probe status %d", resp.StatusCode))
+			}
+		}
+	}
+
 	urls := probeCandidateURLs(baseURL, orgUUID)
 	var lastErr string
 	var lastStatus int

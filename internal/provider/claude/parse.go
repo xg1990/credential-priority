@@ -55,14 +55,22 @@ type effectiveWindow struct {
 	longWindowResetAt *time.Time
 }
 
-// ParseClaudeUsage 将 Claude 响应 JSON 解析为可信额度 fresh probe 结果。
+// ParseClaudeUsage 将 Claude 响应 JSON 与 Headers 解析为可信额度 fresh probe 结果。
 func ParseClaudeUsage(raw []byte, headers host.Header, observedAt time.Time) ProbeResult {
+	orgUUIDFromHeader := extractOrgFromHeaders(headers)
+
+	// 0. 优先从 Anthropic Unified Rate Limit 响应头中解析高精配额 (5h & 7d utilization & reset)
+	if res, ok := parseUnifiedRateLimitHeaders(headers, observedAt); ok {
+		if res.OrganizationUUID == "" && orgUUIDFromHeader != "" {
+			res.OrganizationUUID = orgUUIDFromHeader
+		}
+		return res
+	}
+
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return failedResult(observedAt, "empty claude usage response")
 	}
-
-	orgUUIDFromHeader := extractOrgFromHeaders(headers)
 
 	// 1. 数组形态：可能为 /organizations 列表
 	if trimmed[0] == '[' {
@@ -238,10 +246,21 @@ func pickFromRateLimits(limits claudeRateLimits, observedAt time.Time) (effectiv
 
 // ParseClaudeRateLimitError 解析 HTTP 429 或 rate limit error 正文与响应头。
 func ParseClaudeRateLimitError(raw []byte, headers host.Header, observedAt time.Time) ProbeResult {
+	orgUUIDFromHeader := extractOrgFromHeaders(headers)
+
+	// 0. 优先从 Anthropic Unified Rate Limit 响应头中解析精确重置信息
+	if res, ok := parseUnifiedRateLimitHeaders(headers, observedAt); ok {
+		res.Remaining = int64Ptr(0)
+		res.Error = "rate limit reached"
+		if res.OrganizationUUID == "" && orgUUIDFromHeader != "" {
+			res.OrganizationUUID = orgUUIDFromHeader
+		}
+		return res
+	}
+
 	var resetAt *time.Time
 	planType := core.PlanTypePro
 	zeroRemaining := int64(0)
-	orgUUIDFromHeader := extractOrgFromHeaders(headers)
 
 	if len(raw) > 0 {
 		var generic map[string]any
@@ -278,13 +297,212 @@ func ParseClaudeRateLimitError(raw []byte, headers host.Header, observedAt time.
 	}
 }
 
-func extractOrgFromHeaders(headers host.Header) string {
+func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (ProbeResult, bool) {
 	if headers == nil {
+		return ProbeResult{}, false
+	}
+
+	orgUUID := extractOrgFromHeaders(headers)
+
+	util7dStr := getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-7d-utilization")
+	reset7dStr := getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-7d-reset")
+	status7d := strings.ToLower(strings.TrimSpace(getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-7d-status")))
+
+	util5hStr := getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-5h-utilization")
+	reset5hStr := getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-5h-reset")
+	status5h := strings.ToLower(strings.TrimSpace(getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-5h-status")))
+
+	unifiedStatus := strings.ToLower(strings.TrimSpace(getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-status")))
+	utilUnifiedStr := getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-utilization")
+	resetUnifiedStr := getHeaderCaseInsensitive(headers, "anthropic-ratelimit-unified-reset")
+
+	hasUnified := util7dStr != "" || reset7dStr != "" || status7d != "" ||
+		util5hStr != "" || reset5hStr != "" || status5h != "" ||
+		unifiedStatus != "" || utilUnifiedStr != "" || resetUnifiedStr != ""
+
+	if !hasUnified {
+		return ProbeResult{}, false
+	}
+
+	var reset7d *time.Time
+	if reset7dStr != "" {
+		if t, ok := parseTimeString(reset7dStr); ok {
+			reset7d = t
+		}
+	}
+
+	var reset5h *time.Time
+	if reset5hStr != "" {
+		if t, ok := parseTimeString(reset5hStr); ok {
+			reset5h = t
+		}
+	}
+
+	var resetUnified *time.Time
+	if resetUnifiedStr != "" {
+		if t, ok := parseTimeString(resetUnifiedStr); ok {
+			resetUnified = t
+		}
+	}
+
+	var util7d float64
+	var hasUtil7d bool
+	if util7dStr != "" {
+		if u, err := strconv.ParseFloat(util7dStr, 64); err == nil {
+			util7d = u
+			hasUtil7d = true
+		}
+	}
+
+	var util5h float64
+	var hasUtil5h bool
+	if util5hStr != "" {
+		if u, err := strconv.ParseFloat(util5hStr, 64); err == nil {
+			util5h = u
+			hasUtil5h = true
+		}
+	}
+
+	var utilUnified float64
+	var hasUtilUnified bool
+	if utilUnifiedStr != "" {
+		if u, err := strconv.ParseFloat(utilUnifiedStr, 64); err == nil {
+			utilUnified = u
+			hasUtilUnified = true
+		}
+	}
+
+	planType := core.PlanTypePro
+
+	// 1. 显式限流或额度已用尽 (utilization >= 1.0 或 status == rejected)
+	if status7d == "rejected" || (hasUtil7d && util7d >= 1.0) {
+		resetAt := reset7d
+		if resetAt == nil {
+			resetAt = resetUnified
+		}
+		if resetAt == nil {
+			t := observedAt.UTC().Add(7 * 24 * time.Hour)
+			resetAt = &t
+		}
+		return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID), true
+	}
+
+	if status5h == "rejected" || (hasUtil5h && util5h >= 1.0) {
+		resetAt := reset5h
+		if resetAt == nil {
+			resetAt = resetUnified
+		}
+		if resetAt == nil {
+			t := observedAt.UTC().Add(5 * time.Hour)
+			resetAt = &t
+		}
+		return makeReadyResult(observedAt, resetAt, 0, WindowFiveHour, reset7d, planType, orgUUID), true
+	}
+
+	if unifiedStatus == "rejected" {
+		resetAt := resetUnified
+		if resetAt == nil {
+			resetAt = reset7d
+		}
+		if resetAt == nil {
+			resetAt = reset5h
+		}
+		if resetAt == nil {
+			t := observedAt.UTC().Add(5 * time.Hour)
+			resetAt = &t
+		}
+		return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID), true
+	}
+
+	// 2. 同时存在 7d 与 5h utilization：7d 决定账户总体周剩余额度，5h 为短期窗口
+	if hasUtil7d && hasUtil5h {
+		remaining7d := int64(math.Max(0, math.Min(100, math.Round((1.0-util7d)*100))))
+		remaining5h := int64(math.Max(0, math.Min(100, math.Round((1.0-util5h)*100))))
+
+		if remaining7d <= 0 {
+			resetAt := reset7d
+			if resetAt == nil {
+				t := observedAt.UTC().Add(7 * 24 * time.Hour)
+				resetAt = &t
+			}
+			return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID), true
+		}
+		if remaining5h <= 0 {
+			resetAt := reset5h
+			if resetAt == nil {
+				t := observedAt.UTC().Add(5 * time.Hour)
+				resetAt = &t
+			}
+			return makeReadyResult(observedAt, resetAt, 0, WindowFiveHour, reset7d, planType, orgUUID), true
+		}
+
+		resetAt := reset7d
+		if resetAt == nil {
+			t := observedAt.UTC().Add(7 * 24 * time.Hour)
+			resetAt = &t
+		}
+		return makeReadyResult(observedAt, resetAt, remaining7d, WindowWeekly, reset7d, planType, orgUUID), true
+	}
+
+	// 3. 仅存在 7d utilization
+	if hasUtil7d {
+		remaining7d := int64(math.Max(0, math.Min(100, math.Round((1.0-util7d)*100))))
+		resetAt := reset7d
+		if resetAt == nil {
+			t := observedAt.UTC().Add(7 * 24 * time.Hour)
+			resetAt = &t
+		}
+		return makeReadyResult(observedAt, resetAt, remaining7d, WindowWeekly, reset7d, planType, orgUUID), true
+	}
+
+	// 4. 仅存在 5h utilization
+	if hasUtil5h {
+		remaining5h := int64(math.Max(0, math.Min(100, math.Round((1.0-util5h)*100))))
+		resetAt := reset5h
+		if resetAt == nil {
+			t := observedAt.UTC().Add(5 * time.Hour)
+			resetAt = &t
+		}
+		return makeReadyResult(observedAt, resetAt, remaining5h, WindowFiveHour, reset7d, planType, orgUUID), true
+	}
+
+	// 5. 通用 unified utilization
+	if hasUtilUnified {
+		remaining := int64(math.Max(0, math.Min(100, math.Round((1.0-utilUnified)*100))))
+		resetAt := resetUnified
+		if resetAt == nil {
+			t := observedAt.UTC().Add(7 * 24 * time.Hour)
+			resetAt = &t
+		}
+		return makeReadyResult(observedAt, resetAt, remaining, WindowWeekly, resetUnified, planType, orgUUID), true
+	}
+
+	// 6. 仅有 allowed 状态响应头
+	if unifiedStatus == "allowed" || status7d == "allowed" || status5h == "allowed" {
+		resetAt := reset7d
+		if resetAt == nil {
+			resetAt = reset5h
+		}
+		if resetAt == nil {
+			resetAt = resetUnified
+		}
+		if resetAt == nil {
+			t := observedAt.UTC().Add(7 * 24 * time.Hour)
+			resetAt = &t
+		}
+		return makeReadyResult(observedAt, resetAt, 100, WindowWeekly, reset7d, planType, orgUUID), true
+	}
+
+	return ProbeResult{}, false
+}
+
+func getHeaderCaseInsensitive(h host.Header, target string) string {
+	if h == nil {
 		return ""
 	}
-	for key, values := range headers {
-		if strings.EqualFold(strings.TrimSpace(key), "anthropic-organization-id") {
-			for _, val := range values {
+	for k, v := range h {
+		if strings.EqualFold(strings.TrimSpace(k), target) {
+			for _, val := range v {
 				if trimmed := strings.TrimSpace(val); trimmed != "" {
 					return trimmed
 				}
@@ -292,6 +510,13 @@ func extractOrgFromHeaders(headers host.Header) string {
 		}
 	}
 	return ""
+}
+
+func extractOrgFromHeaders(headers host.Header) string {
+	if headers == nil {
+		return ""
+	}
+	return getHeaderCaseInsensitive(headers, "anthropic-organization-id")
 }
 
 func extractResetFromGenericMap(m map[string]any, observedAt time.Time) *time.Time {
@@ -325,7 +550,8 @@ func extractResetFromHeaders(headers host.Header, observedAt time.Time) *time.Ti
 				continue
 			}
 			switch lowerKey {
-			case "anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset", "x-ratelimit-reset":
+			case "anthropic-ratelimit-unified-7d-reset", "anthropic-ratelimit-unified-5h-reset", "anthropic-ratelimit-unified-reset",
+				"anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset", "x-ratelimit-reset":
 				if t, ok := parseTimeString(trimmed); ok {
 					return t
 				}

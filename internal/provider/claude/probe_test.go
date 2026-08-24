@@ -282,3 +282,53 @@ func TestProber_Probe_NetworkError(t *testing.T) {
 		t.Errorf("expected StatusProbeFailed, got %v", result.Status)
 	}
 }
+
+func TestProber_Probe_MessagesMicroProbeSuccess(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	expectedWeeklyReset := time.Unix(1787767200, 0).UTC()
+
+	mock := mockHostDoer{
+		handler: func(req host.HTTPRequest) (host.HTTPResponse, error) {
+			if strings.HasSuffix(req.URL, "/v1/messages") && req.Method == http.MethodPost {
+				return host.HTTPResponse{
+					StatusCode: http.StatusOK,
+					Headers: host.Header{
+						"anthropic-ratelimit-unified-5h-status":      []string{"allowed"},
+						"anthropic-ratelimit-unified-5h-utilization": []string{"0.0"},
+						"anthropic-ratelimit-unified-5h-reset":       []string{"1787627400"},
+						"anthropic-ratelimit-unified-7d-status":      []string{"allowed"},
+						"anthropic-ratelimit-unified-7d-utilization": []string{"0.49"},
+						"anthropic-ratelimit-unified-7d-reset":       []string{"1787767200"},
+						"anthropic-ratelimit-unified-status":        []string{"allowed"},
+						"anthropic-organization-id":                  []string{"org-micro-probe-123"},
+					},
+					Body: []byte(`{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}]}`),
+				}, nil
+			}
+			return host.HTTPResponse{StatusCode: http.StatusNotFound}, nil
+		},
+	}
+
+	prober := NewProber(mock, fixedClock{now: now})
+	result := prober.Probe(context.Background(), ProbeRequest{
+		Provider:    core.ProviderClaude,
+		AuthIndex:   "auth_claude_micro",
+		AccessToken: "test-token",
+	})
+
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v (err: %s)", result.Status, result.Error)
+	}
+	if result.Remaining == nil || *result.Remaining != 51 {
+		t.Errorf("expected remaining 51 (from 0.49 utilization), got %v", result.Remaining)
+	}
+	if result.ResetAt == nil || !result.ResetAt.Equal(expectedWeeklyReset) {
+		t.Errorf("expected resetAt %v, got %v", expectedWeeklyReset, result.ResetAt)
+	}
+	if result.OrganizationUUID != "org-micro-probe-123" {
+		t.Errorf("expected org-micro-probe-123, got %v", result.OrganizationUUID)
+	}
+	if result.Window != WindowWeekly {
+		t.Errorf("expected WindowWeekly, got %v", result.Window)
+	}
+}

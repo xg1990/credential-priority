@@ -291,3 +291,124 @@ func TestParseClaudeUsage_CorruptOrEmpty(t *testing.T) {
 		t.Errorf("expected StatusProbeFailed for corrupt body, got %v", resCorrupt.Status)
 	}
 }
+
+func TestParseClaudeUsage_UnifiedHeaders_7dAnd5h(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	expectedWeeklyReset := time.Unix(1787767200, 0).UTC()
+
+	headers := host.Header{
+		"anthropic-ratelimit-unified-5h-status":      []string{"allowed"},
+		"anthropic-ratelimit-unified-5h-utilization": []string{"0.0"},
+		"anthropic-ratelimit-unified-5h-reset":       []string{"1787627400"},
+		"anthropic-ratelimit-unified-7d-status":      []string{"allowed"},
+		"anthropic-ratelimit-unified-7d-utilization": []string{"0.49"},
+		"anthropic-ratelimit-unified-7d-reset":       []string{"1787767200"},
+		"anthropic-ratelimit-unified-status":        []string{"allowed"},
+		"anthropic-organization-id":                  []string{"org-test-7d-5h"},
+	}
+
+	result := ParseClaudeUsage([]byte(`{"type":"message"}`), headers, observedAt)
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v (err: %s)", result.Status, result.Error)
+	}
+	if result.Remaining == nil || *result.Remaining != 51 {
+		t.Errorf("expected exact remaining 51 (1 - 0.49), got %v", result.Remaining)
+	}
+	if result.ResetAt == nil || !result.ResetAt.Equal(expectedWeeklyReset) {
+		t.Errorf("expected resetAt %v, got %v", expectedWeeklyReset, result.ResetAt)
+	}
+	if result.LongWindowResetAt == nil || !result.LongWindowResetAt.Equal(expectedWeeklyReset) {
+		t.Errorf("expected LongWindowResetAt %v, got %v", expectedWeeklyReset, result.LongWindowResetAt)
+	}
+	if result.Window != WindowWeekly {
+		t.Errorf("expected WindowWeekly, got %v", result.Window)
+	}
+	if result.OrganizationUUID != "org-test-7d-5h" {
+		t.Errorf("expected org-test-7d-5h, got %v", result.OrganizationUUID)
+	}
+}
+
+func TestParseClaudeUsage_UnifiedHeaders_5hDepleted(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	expected5hReset := time.Unix(1787627400, 0).UTC()
+	expectedWeeklyReset := time.Unix(1787767200, 0).UTC()
+
+	headers := host.Header{
+		"anthropic-ratelimit-unified-5h-status":      []string{"rejected"},
+		"anthropic-ratelimit-unified-5h-utilization": []string{"1.0"},
+		"anthropic-ratelimit-unified-5h-reset":       []string{"1787627400"},
+		"anthropic-ratelimit-unified-7d-status":      []string{"allowed"},
+		"anthropic-ratelimit-unified-7d-utilization": []string{"0.20"},
+		"anthropic-ratelimit-unified-7d-reset":       []string{"1787767200"},
+		"anthropic-ratelimit-unified-status":        []string{"rejected"},
+	}
+
+	result := ParseClaudeUsage([]byte(`{"type":"error"}`), headers, observedAt)
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v", result.Status)
+	}
+	if result.Remaining == nil || *result.Remaining != 0 {
+		t.Errorf("expected remaining 0, got %v", result.Remaining)
+	}
+	if result.ResetAt == nil || !result.ResetAt.Equal(expected5hReset) {
+		t.Errorf("expected resetAt %v, got %v", expected5hReset, result.ResetAt)
+	}
+	if result.Window != WindowFiveHour {
+		t.Errorf("expected WindowFiveHour, got %v", result.Window)
+	}
+	if result.LongWindowResetAt == nil || !result.LongWindowResetAt.Equal(expectedWeeklyReset) {
+		t.Errorf("expected LongWindowResetAt %v, got %v", expectedWeeklyReset, result.LongWindowResetAt)
+	}
+}
+
+func TestParseClaudeUsage_UnifiedHeaders_7dDepleted(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	expectedWeeklyReset := time.Unix(1787767200, 0).UTC()
+
+	headers := host.Header{
+		"anthropic-ratelimit-unified-7d-status":      []string{"rejected"},
+		"anthropic-ratelimit-unified-7d-utilization": []string{"1.0"},
+		"anthropic-ratelimit-unified-7d-reset":       []string{"1787767200"},
+		"anthropic-ratelimit-unified-status":        []string{"rejected"},
+	}
+
+	result := ParseClaudeUsage([]byte(`{}`), headers, observedAt)
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v", result.Status)
+	}
+	if result.Remaining == nil || *result.Remaining != 0 {
+		t.Errorf("expected remaining 0, got %v", result.Remaining)
+	}
+	if result.ResetAt == nil || !result.ResetAt.Equal(expectedWeeklyReset) {
+		t.Errorf("expected resetAt %v, got %v", expectedWeeklyReset, result.ResetAt)
+	}
+	if result.Window != WindowWeekly {
+		t.Errorf("expected WindowWeekly, got %v", result.Window)
+	}
+}
+
+func TestParseClaudeRateLimitError_UnifiedHeaders(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	expected5hReset := time.Unix(1787627400, 0).UTC()
+
+	headers := host.Header{
+		"anthropic-ratelimit-unified-5h-status":      []string{"rejected"},
+		"anthropic-ratelimit-unified-5h-utilization": []string{"1.0"},
+		"anthropic-ratelimit-unified-5h-reset":       []string{"1787627400"},
+		"anthropic-ratelimit-unified-status":        []string{"rejected"},
+	}
+
+	result := ParseClaudeRateLimitError([]byte(`{"type":"error"}`), headers, observedAt)
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v", result.Status)
+	}
+	if result.Remaining == nil || *result.Remaining != 0 {
+		t.Errorf("expected remaining 0, got %v", result.Remaining)
+	}
+	if result.ResetAt == nil || !result.ResetAt.Equal(expected5hReset) {
+		t.Errorf("expected resetAt %v, got %v", expected5hReset, result.ResetAt)
+	}
+	if result.Window != WindowFiveHour {
+		t.Errorf("expected WindowFiveHour, got %v", result.Window)
+	}
+}
