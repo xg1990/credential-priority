@@ -141,7 +141,7 @@ func pickEffectiveWindow(windows []candidateWindow) (candidateWindow, bool) {
 		if fiveHour.remaining <= 0 {
 			return fiveHour, true
 		}
-		return fiveHour, true
+		return weekly, true
 	}
 	if hasWeekly {
 		return weekly, true
