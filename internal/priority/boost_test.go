@@ -24,7 +24,7 @@ func TestResetBoost_Claude(t *testing.T) {
 		expected int
 	}{
 		{
-			name: "claude pro near 5h reset",
+			name: "claude pro near 5h reset only does not boost (short window ignored)",
 			item: PlanItem{
 				Credential: core.Credential{
 					Provider: core.ProviderClaude,
@@ -33,7 +33,7 @@ func TestResetBoost_Claude(t *testing.T) {
 				PlanType: core.PlanTypePro,
 				ResetAt:  &nearReset,
 			},
-			expected: 50,
+			expected: 0,
 		},
 		{
 			name: "claude pro far reset",
@@ -48,7 +48,7 @@ func TestResetBoost_Claude(t *testing.T) {
 			expected: 0,
 		},
 		{
-			name: "claude free near reset",
+			name: "claude free near short reset only does not boost",
 			item: PlanItem{
 				Credential: core.Credential{
 					Provider: core.ProviderClaude,
@@ -57,10 +57,10 @@ func TestResetBoost_Claude(t *testing.T) {
 				PlanType: core.PlanTypeFree,
 				ResetAt:  &nearReset,
 			},
-			expected: 50,
+			expected: 0,
 		},
 		{
-			name: "claude with long window near reset",
+			name: "claude with long window near reset triggers boost",
 			item: PlanItem{
 				Credential: core.Credential{
 					Provider: core.ProviderClaude,
@@ -94,7 +94,7 @@ func TestResetBoost_Claude(t *testing.T) {
 	}
 }
 
-func TestResetBoost_AntigravityAndCodexShortWindow(t *testing.T) {
+func TestResetBoost_AntigravityAndCodexLongWindow(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	nearReset := now.Add(2 * time.Hour)
 	farLongWindow := now.Add(48 * time.Hour)
@@ -112,22 +112,40 @@ func TestResetBoost_AntigravityAndCodexShortWindow(t *testing.T) {
 		expected int
 	}{
 		{
-			name:     "antigravity near 5h reset with far weekly window",
+			name:     "antigravity near 5h reset with far weekly window stays unboosted",
 			provider: core.ProviderAntigravity,
 			item: PlanItem{
 				PlanType:          core.PlanTypePro,
 				ResetAt:           &nearReset,
 				LongWindowResetAt: &farLongWindow,
 			},
+			expected: 0,
+		},
+		{
+			name:     "antigravity near weekly window triggers boost",
+			provider: core.ProviderAntigravity,
+			item: PlanItem{
+				PlanType:          core.PlanTypePro,
+				LongWindowResetAt: &nearReset,
+			},
 			expected: 50,
 		},
 		{
-			name:     "codex near 5h reset with far weekly window",
+			name:     "codex near 5h reset with far weekly window stays unboosted",
 			provider: core.ProviderCodex,
 			item: PlanItem{
 				PlanType:          core.PlanTypePro,
 				ResetAt:           &nearReset,
 				LongWindowResetAt: &farLongWindow,
+			},
+			expected: 0,
+		},
+		{
+			name:     "codex near weekly window triggers boost",
+			provider: core.ProviderCodex,
+			item: PlanItem{
+				PlanType:          core.PlanTypePro,
+				LongWindowResetAt: &nearReset,
 			},
 			expected: 50,
 		},
@@ -166,18 +184,18 @@ func TestPlannedPriority_Claude(t *testing.T) {
 	}
 
 	boostedItem := PlanItem{
-		Credential: core.Credential{Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
-		PlanType:   core.PlanTypePro,
-		ResetAt:    &nearReset,
+		Credential:        core.Credential{Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+		PlanType:          core.PlanTypePro,
+		LongWindowResetAt: &nearReset,
 	}
 	if p := plannedPriority(boostedItem, 100, options); p != 999 {
 		t.Errorf("expected boosted priority 999, got %d", p)
 	}
 
 	regularItem := PlanItem{
-		Credential: core.Credential{Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
-		PlanType:   core.PlanTypePro,
-		ResetAt:    &farReset,
+		Credential:        core.Credential{Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+		PlanType:          core.PlanTypePro,
+		LongWindowResetAt: &farReset,
 	}
 	if p := plannedPriority(regularItem, 100, options); p != 100 {
 		t.Errorf("expected regular priority 100, got %d", p)

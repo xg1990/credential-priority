@@ -113,16 +113,17 @@ func TestPlanFreshOnly_Claude_NearResetBoost(t *testing.T) {
 
 	evidence := []ProbeEvidence{
 		{
-			Provider:      core.ProviderClaude,
-			AuthIndex:     "auth-cb",
-			ObservedAt:    now,
-			ResetAt:       &resetAtNear,
-			Remaining:     &rem,
-			Freshness:     core.FreshnessFresh,
-			ProbeStatus:   core.ProbeStatusReady,
-			Status:        EvidenceStatusReady,
-			PlanType:      core.PlanTypePro,
-			EvidenceFresh: true,
+			Provider:          core.ProviderClaude,
+			AuthIndex:         "auth-cb",
+			ObservedAt:        now,
+			ResetAt:           &resetAtNear,
+			LongWindowResetAt: &resetAtNear,
+			Remaining:         &rem,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
 		},
 	}
 

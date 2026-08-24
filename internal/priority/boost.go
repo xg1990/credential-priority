@@ -20,22 +20,16 @@ func resetBoost(item PlanItem, options Options) int {
 	provider := planItemProvider(item)
 	var resetAt *time.Time
 
-	// Claude / Antigravity / Codex：短窗 ResetAt 临近刷新优先，否则退回 LongWindowResetAt，
-	// 两者都不满足时退回 ResetAt（可能为 nil）——三者都有对称的 5h 短窗 + weekly 长窗结构。
-	// xAI：999 提权仅看 LongWindowResetAt（free 计划另有独立冷却机制，短窗不参与提权判断）。
+	// 999 提权仅看 LongWindowResetAt（周额度临近刷新），忽略 5h 短窗（避免常态 999 提权）。
+	// 当 LongWindowResetAt 存在且在 ResetBoostWithin（如 24h）内即将重置时，才触发提权。
 	switch provider {
-	case core.ProviderClaude, core.ProviderAntigravity, core.ProviderCodex:
-		if item.ResetAt != nil && item.ResetAt.After(options.Now) && item.ResetAt.Sub(options.Now) < options.ResetBoostWithin {
-			resetAt = item.ResetAt
-		} else if item.LongWindowResetAt != nil {
-			resetAt = item.LongWindowResetAt
-		} else {
-			resetAt = item.ResetAt
-		}
-	case core.ProviderXAI:
+	case core.ProviderClaude, core.ProviderAntigravity, core.ProviderCodex, core.ProviderXAI:
 		resetAt = item.LongWindowResetAt
 	default:
-		resetAt = item.ResetAt
+		resetAt = item.LongWindowResetAt
+		if resetAt == nil {
+			resetAt = item.ResetAt
+		}
 	}
 
 	if resetAt == nil {
