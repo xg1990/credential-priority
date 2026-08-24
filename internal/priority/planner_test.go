@@ -286,3 +286,93 @@ func TestPlanFreshOnly_MultiProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
+	now := time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)
+	// Account 1: reset in 2 days (48h), 80% remaining -> score = 0.80 / (48/168) = 2.80
+	reset2Days := now.Add(48 * time.Hour)
+	rem80 := int64(80)
+
+	// Account 2: reset in 4 days (96h), 80% remaining -> score = 0.80 / (96/168) = 1.40
+	reset4Days := now.Add(96 * time.Hour)
+
+	// Account 3: reset in 2 days (48h), 10% remaining -> score = 0.10 / (48/168) = 0.35
+	rem10 := int64(10)
+
+	credentials := []core.Credential{
+		{Name: "c-fast-burn", AuthIndex: "auth-fast", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+		{Name: "c-mid-pace", AuthIndex: "auth-mid", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+		{Name: "c-slow-burn", AuthIndex: "auth-slow", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+	}
+
+	evidence := []ProbeEvidence{
+		{
+			Provider:          core.ProviderClaude,
+			AuthIndex:         "auth-fast", // reset in 2d, 10% remaining (score 0.35)
+			ObservedAt:        now,
+			ResetAt:           &reset2Days,
+			LongWindowResetAt: &reset2Days,
+			Remaining:         &rem10,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+		{
+			Provider:          core.ProviderClaude,
+			AuthIndex:         "auth-mid", // reset in 4d, 80% remaining (score 1.40)
+			ObservedAt:        now,
+			ResetAt:           &reset4Days,
+			LongWindowResetAt: &reset4Days,
+			Remaining:         &rem80,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+		{
+			Provider:          core.ProviderClaude,
+			AuthIndex:         "auth-slow", // reset in 2d, 80% remaining (score 2.80) -> should rank #1
+			ObservedAt:        now,
+			ResetAt:           &reset2Days,
+			LongWindowResetAt: &reset2Days,
+			Remaining:         &rem80,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+	}
+
+	options := Options{
+		Now:         now,
+		MaxPriority: 100,
+		StartPriorityByProvider: map[core.Provider]int{
+			core.ProviderClaude: 100,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, options)
+	if len(plan.Items) != 3 {
+		t.Fatalf("expected 3 plan items, got %d", len(plan.Items))
+	}
+
+	priorityByAuth := make(map[string]int)
+	for _, item := range plan.Items {
+		priorityByAuth[item.Credential.AuthIndex] = item.Priority
+	}
+
+	// 预期排序：auth-slow (score 2.80) = 100, auth-mid (score 1.40) = 99, auth-fast (score 0.35) = 98
+	if p := priorityByAuth["auth-slow"]; p != 100 {
+		t.Errorf("expected auth-slow priority 100, got %d", p)
+	}
+	if p := priorityByAuth["auth-mid"]; p != 99 {
+		t.Errorf("expected auth-mid priority 99, got %d", p)
+	}
+	if p := priorityByAuth["auth-fast"]; p != 98 {
+		t.Errorf("expected auth-fast priority 98, got %d", p)
+	}
+}

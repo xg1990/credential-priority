@@ -680,7 +680,7 @@ func positiveCandidates(items []PlanItem, options Options) []int {
 }
 
 func compareCandidates(left PlanItem, right PlanItem, options Options) int {
-	// xAI: free eligible ranks above paid; then remaining, reset, AuthIndex.
+	// xAI: free eligible ranks above paid; then pacing score, remaining, reset, AuthIndex.
 	if planItemProvider(left) == core.ProviderXAI || planItemProvider(right) == core.ProviderXAI {
 		leftFree := isXAIFreeEligibleItem(left, options)
 		rightFree := isXAIFreeEligibleItem(right, options)
@@ -689,6 +689,9 @@ func compareCandidates(left PlanItem, right PlanItem, options Options) int {
 			return -1
 		case rightFree && !leftFree:
 			return 1
+		}
+		if scoreCmp := comparePacingScores(pacingScore(left, options.Now), pacingScore(right, options.Now)); scoreCmp != 0 {
+			return scoreCmp
 		}
 		if left.Remaining != nil && right.Remaining != nil && *left.Remaining != *right.Remaining {
 			if *left.Remaining > *right.Remaining {
@@ -704,10 +707,82 @@ func compareCandidates(left PlanItem, right PlanItem, options Options) int {
 	if options.PaidFirst && paidRank(left.PlanType) != paidRank(right.PlanType) {
 		return paidRank(right.PlanType) - paidRank(left.PlanType)
 	}
+	// 基于 Pacing 健康度评分排序：优先消耗剩余额度比例落后于时间流逝比例的账号
+	if scoreCmp := comparePacingScores(pacingScore(left, options.Now), pacingScore(right, options.Now)); scoreCmp != 0 {
+		return scoreCmp
+	}
+	if left.Remaining != nil && right.Remaining != nil && *left.Remaining != *right.Remaining {
+		if *left.Remaining > *right.Remaining {
+			return -1
+		}
+		return 1
+	}
 	if result := compareResetAt(left.ResetAt, right.ResetAt); result != 0 {
 		return result
 	}
 	return cmp.Compare(left.Credential.AuthIndex, right.Credential.AuthIndex)
+}
+
+const floatEpsilon = 1e-6
+
+func comparePacingScores(scoreLeft, scoreRight float64) int {
+	diff := scoreLeft - scoreRight
+	if diff > floatEpsilon {
+		return -1 // scoreLeft > scoreRight，left 优先
+	}
+	if diff < -floatEpsilon {
+		return 1 // scoreRight > scoreLeft，right 优先
+	}
+	return 0
+}
+
+// pacingScore 计算凭据的额度消耗健康度得分（Pacing / Burn Rate Ratio）。
+// Score = (Remaining Quota %) / (Remaining Time %)
+// 得分越高表示当前额度越富余、或重置时间越临近，应拥有越高优先级。
+func pacingScore(item PlanItem, now time.Time) float64 {
+	if item.Remaining == nil || *item.Remaining <= 0 {
+		return 0
+	}
+	remainingRatio := float64(*item.Remaining) / 100.0
+
+	// 确定重置时间与所属周期总长度
+	// 优先以周窗口（LongWindowResetAt）为基准；若无则退回短窗口/日窗口（ResetAt）
+	var resetAt *time.Time
+	var totalWindow time.Duration
+
+	if item.LongWindowResetAt != nil {
+		resetAt = item.LongWindowResetAt
+		totalWindow = 7 * 24 * time.Hour
+	} else if item.ResetAt != nil {
+		resetAt = item.ResetAt
+		timeRemaining := resetAt.Sub(now)
+		if timeRemaining > 48*time.Hour {
+			totalWindow = 7 * 24 * time.Hour
+		} else if timeRemaining > 6*time.Hour {
+			totalWindow = 24 * time.Hour
+		} else {
+			totalWindow = 5 * time.Hour
+		}
+	}
+
+	if resetAt == nil || totalWindow <= 0 {
+		return remainingRatio
+	}
+
+	timeRemaining := resetAt.Sub(now)
+	if timeRemaining <= 0 {
+		return remainingRatio / 0.001
+	}
+
+	timeRemainingRatio := float64(timeRemaining) / float64(totalWindow)
+	if timeRemainingRatio > 1.0 {
+		timeRemainingRatio = 1.0
+	}
+	if timeRemainingRatio < 0.001 {
+		timeRemainingRatio = 0.001
+	}
+
+	return remainingRatio / timeRemainingRatio
 }
 
 func paidRank(planType core.PlanType) int {
