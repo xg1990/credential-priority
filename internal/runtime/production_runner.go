@@ -131,12 +131,12 @@ func (r *Runtime) runAutoParallelProviders(ctx context.Context, request TaskRequ
 		return nil
 	}
 
-	type providerResult struct {
+	type providerEvidenceResult struct {
 		provider core.Provider
-		result   apply.Result
+		evidence []priority.ProbeEvidence
 		err      error
 	}
-	results := make(chan providerResult, len(providers))
+	evidenceChan := make(chan providerEvidenceResult, len(providers))
 	var wg sync.WaitGroup
 	for _, providerName := range providers {
 		providerName := providerName
@@ -146,12 +146,12 @@ func (r *Runtime) runAutoParallelProviders(ctx context.Context, request TaskRequ
 			provider := core.Provider(providerName)
 			credentials := filterCredentialsToProvider(allCredentials, provider)
 			if len(credentials) == 0 {
-				results <- providerResult{provider: provider}
+				evidenceChan <- providerEvidenceResult{provider: provider}
 				return
 			}
 			probes, err := probesForRequest(ctx, store, credentials, scheduleOptions(request.Config, now), request.AuthIndexes, request.Config.AntigravityModelGroup, TriggerAutoApply)
 			if err != nil {
-				results <- providerResult{provider: provider, err: err}
+				evidenceChan <- providerEvidenceResult{provider: provider, err: err}
 				return
 			}
 			evidence, err := r.collectEvidenceForTrigger(ctx, collectInput{
@@ -159,60 +159,62 @@ func (r *Runtime) runAutoParallelProviders(ctx context.Context, request TaskRequ
 				now: now, cacheTTL: defaultProbeCacheTTL, forceProbe: false,
 				maxConcurrency: request.Config.MaxConcurrency, antigravityModelGroup: request.Config.AntigravityModelGroup,
 			}, TriggerAutoApply)
-			if err != nil {
-				results <- providerResult{provider: provider, err: err}
-				return
-			}
-			plan := priority.PlanFreshOnly(credentials, evidence, priorityOptions(request.Config, now))
-			plan = preserveProbeFailureState(plan, evidence)
-			result, err := apply.Apply(ctx, apply.Request{Host: client, Auditor: r, Plan: plan, ReportSkippedPlan: true})
-			results <- providerResult{provider: provider, result: result, err: err}
+			evidenceChan <- providerEvidenceResult{provider: provider, evidence: evidence, err: err}
 		}()
 	}
 	wg.Wait()
-	close(results)
+	close(evidenceChan)
 
 	var (
-		firstErr  error
-		attempted int
-		succeeded int
-		failed    int
-		skipped   int
+		firstErr    error
+		allEvidence []priority.ProbeEvidence
 	)
-	parts := make([]string, 0, len(providers))
-	providerEntries := make([]RunHistoryProvider, 0, len(providers))
-	for item := range results {
-		errText := ""
+	probeErrors := make(map[core.Provider]string)
+	for item := range evidenceChan {
 		if item.err != nil {
-			errText = item.err.Error()
+			probeErrors[item.provider] = item.err.Error()
 			if firstErr == nil {
-				firstErr = fmt.Errorf("%s: %w", item.provider, item.err)
+				firstErr = fmt.Errorf("%s probe: %w", item.provider, item.err)
 			}
 		}
-		attempted += item.result.Attempted
-		succeeded += item.result.Succeeded
-		failed += item.result.Failed
-		skipped += item.result.Skipped
-		parts = append(parts, fmt.Sprintf("%s attempted=%d succeeded=%d failed=%d skipped=%d", item.provider, item.result.Attempted, item.result.Succeeded, item.result.Failed, item.result.Skipped))
-		providerEntries = append(providerEntries, RunHistoryProvider{
-			Name:      string(item.provider),
-			Attempted: item.result.Attempted,
-			Succeeded: item.result.Succeeded,
-			Failed:    item.result.Failed,
-			Skipped:   item.result.Skipped,
-			Error:     errText,
-		})
+		if len(item.evidence) > 0 {
+			allEvidence = append(allEvidence, item.evidence...)
+		}
 	}
-	summary := "auto_apply parallel: " + strings.Join(parts, "; ")
-	result := apply.Result{Attempted: attempted, Succeeded: succeeded, Failed: failed, Skipped: skipped}
+
+	plan := priority.PlanFreshOnly(allCredentials, allEvidence, priorityOptions(request.Config, now))
+	plan = preserveProbeFailureState(plan, allEvidence)
+	result, applyErr := apply.Apply(ctx, apply.Request{Host: client, Auditor: r, Plan: plan, ReportSkippedPlan: true})
+	if applyErr != nil && firstErr == nil {
+		firstErr = applyErr
+	}
+
+	providerEntries := runHistoryProvidersFromResult(result)
+	for i := range providerEntries {
+		if errText, ok := probeErrors[core.Provider(providerEntries[i].Name)]; ok {
+			if providerEntries[i].Error == "" {
+				providerEntries[i].Error = errText
+			}
+		}
+	}
+
+	parts := make([]string, 0, len(providerEntries))
+	for _, entry := range providerEntries {
+		parts = append(parts, fmt.Sprintf("%s attempted=%d succeeded=%d failed=%d skipped=%d", entry.Name, entry.Attempted, entry.Succeeded, entry.Failed, entry.Skipped))
+	}
+	summary := "auto_apply: " + strings.Join(parts, "; ")
+	if len(parts) == 0 {
+		summary = fmt.Sprintf("auto_apply credentials=%d attempted=%d succeeded=%d failed=%d skipped=%d", len(allCredentials), result.Attempted, result.Succeeded, result.Failed, result.Skipped)
+	}
+
 	// 先写 history，再 SaveAtomic：避免 SaveAtomic/ctx 失败导致「无记录却算跑过」。
 	r.snapshotRunEntry(result, summary, RunHistoryEntry{
 		Kind:      "auto_apply",
 		Trigger:   string(TriggerAutoApply),
-		Attempted: attempted,
-		Succeeded: succeeded,
-		Failed:    failed,
-		Skipped:   skipped,
+		Attempted: result.Attempted,
+		Succeeded: result.Succeeded,
+		Failed:    result.Failed,
+		Skipped:   result.Skipped,
 		Providers: providerEntries,
 		Message:   summary,
 	})

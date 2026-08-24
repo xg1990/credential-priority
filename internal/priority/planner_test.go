@@ -268,11 +268,6 @@ func TestPlanFreshOnly_MultiProvider(t *testing.T) {
 	options := Options{
 		Now:         now,
 		MaxPriority: 100,
-		StartPriorityByProvider: map[core.Provider]int{
-			core.ProviderClaude:      100,
-			core.ProviderCodex:       100,
-			core.ProviderAntigravity: 100,
-		},
 	}
 
 	plan := PlanFreshOnly(credentials, evidence, options)
@@ -280,10 +275,106 @@ func TestPlanFreshOnly_MultiProvider(t *testing.T) {
 		t.Fatalf("expected 3 plan items, got %d", len(plan.Items))
 	}
 
+	// 全局唯一优先级：跨 Provider 分配 100, 99, 98
+	priorities := make(map[int]bool)
 	for _, item := range plan.Items {
-		if item.Priority != 100 {
-			t.Errorf("expected priority 100 for %s, got %d", item.Credential.Name, item.Priority)
+		if item.Priority < 98 || item.Priority > 100 {
+			t.Errorf("expected priority in [98, 100] for %s, got %d", item.Credential.Name, item.Priority)
 		}
+		if priorities[item.Priority] {
+			t.Errorf("duplicate priority %d found", item.Priority)
+		}
+		priorities[item.Priority] = true
+	}
+}
+
+func TestPlanFreshOnly_CrossProvider_PacingRanking(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+
+	// Claude: reset in 43h (~1.79d), 51% remaining -> Pacing score = 0.51 / (43/168) = 1.99
+	resetClaude := now.Add(43 * time.Hour)
+	remClaude := int64(51)
+
+	// Codex: reset in 120h (5d), 80% remaining -> Pacing score = 0.80 / (120/168) = 1.12
+	resetCodex := now.Add(120 * time.Hour)
+	remCodex := int64(80)
+
+	// Antigravity: reset in 140h (5.83d), 65% remaining -> Pacing score = 0.65 / (140/168) = 0.78
+	resetAG := now.Add(140 * time.Hour)
+	remAG := int64(65)
+
+	credentials := []core.Credential{
+		{Name: "claude-acc", AuthIndex: "auth-claude-urgent", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+		{Name: "codex-acc", AuthIndex: "auth-codex-mid", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+		{Name: "ag-acc", AuthIndex: "auth-ag-slow", Provider: core.ProviderAntigravity, Type: core.CredentialTypeAntigravity},
+	}
+
+	evidence := []ProbeEvidence{
+		{
+			Provider:          core.ProviderClaude,
+			AuthIndex:         "auth-claude-urgent",
+			ObservedAt:        now,
+			ResetAt:           &resetClaude,
+			LongWindowResetAt: &resetClaude,
+			Remaining:         &remClaude,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+		{
+			Provider:          core.ProviderCodex,
+			AuthIndex:         "auth-codex-mid",
+			ObservedAt:        now,
+			ResetAt:           &resetCodex,
+			LongWindowResetAt: &resetCodex,
+			Remaining:         &remCodex,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+		{
+			Provider:          core.ProviderAntigravity,
+			AuthIndex:         "auth-ag-slow",
+			ObservedAt:        now,
+			ResetAt:           &resetAG,
+			LongWindowResetAt: &resetAG,
+			Remaining:         &remAG,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+	}
+
+	options := Options{
+		Now:         now,
+		MaxPriority: 100,
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, options)
+	if len(plan.Items) != 3 {
+		t.Fatalf("expected 3 plan items, got %d", len(plan.Items))
+	}
+
+	priorityByAuth := make(map[string]int)
+	for _, item := range plan.Items {
+		priorityByAuth[item.Credential.AuthIndex] = item.Priority
+	}
+
+	// 预期排序：Claude (score 1.99) -> 100, Codex (score 1.12) -> 99, Antigravity (score 0.78) -> 98
+	if p := priorityByAuth["auth-claude-urgent"]; p != 100 {
+		t.Errorf("expected claude priority 100, got %d", p)
+	}
+	if p := priorityByAuth["auth-codex-mid"]; p != 99 {
+		t.Errorf("expected codex priority 99, got %d", p)
+	}
+	if p := priorityByAuth["auth-ag-slow"]; p != 98 {
+		t.Errorf("expected antigravity priority 98, got %d", p)
 	}
 }
 

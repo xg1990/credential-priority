@@ -112,9 +112,8 @@ func PlanFreshOnly(credentials []core.Credential, evidence []ProbeEvidence, opti
 	evidenceByAuthIndex := freshEvidenceByAuthIndex(evidence)
 	items := initialItems(credentials, evidenceByAuthIndex, options)
 	planFreshPositive(items, options)
-	// 局部探测只会给少数凭证 fresh 证据；若只写 start_priority，会与同伴历史优先级重叠。
-	// 同 provider 启用态正优先级必须在本轮规划结果中唯一，必要时改写无 fresh 同伴并 ForceWrite。
-	ensureUniqueProviderPriorities(items, options)
+	// 跨账号全局优先级去重：保证全量启用态正优先级槽位唯一，且直接反映全局 Pacing 排序
+	ensureUniquePriorities(items, options)
 	capExcludedXAIFreePriorities(items, options)
 	sortPlanItems(items)
 	return Plan{Items: items, Changes: changes(items, options)}
@@ -431,31 +430,31 @@ func xaiMonthlyAndWeeklyDepletedDisabled(options Options) bool {
 
 func planFreshPositive(items []PlanItem, options Options) {
 	candidates := positiveCandidates(items, options)
-	for _, group := range providerCandidateGroups(items, candidates) {
-		slices.SortStableFunc(group, func(left int, right int) int {
-			return compareCandidates(items[left], items[right], options)
-		})
-		priority := startPriorityForProvider(planItemProvider(items[group[0]]), options)
-		for _, itemIndex := range group {
-			items[itemIndex].Priority = plannedPriority(items[itemIndex], priority, options)
-			// 禁用因额度耗尽的凭证，在探测到正向剩余额度后自动恢复启用并参与常规排序。
-			items[itemIndex].Disabled = false
-			items[itemIndex].Reason = "fresh remaining positive"
-			priority--
-			if priority < 1 {
-				priority = 1
-			}
+	slices.SortStableFunc(candidates, func(left int, right int) int {
+		return compareCandidates(items[left], items[right], options)
+	})
+	startPriority := normalizedMaxPriority(options.MaxPriority)
+	if startPriority < 1 {
+		startPriority = 100
+	}
+	priority := startPriority
+	for _, itemIndex := range candidates {
+		items[itemIndex].Priority = plannedPriority(items[itemIndex], priority, options)
+		// 禁用因额度耗尽的凭证，在探测到正向剩余额度后自动恢复启用并参与常规排序。
+		items[itemIndex].Disabled = false
+		items[itemIndex].Reason = "fresh remaining positive"
+		priority--
+		if priority < 1 {
+			priority = 1
 		}
 	}
 }
 
-// ensureUniqueProviderPriorities 保证同 provider 启用态 priority>=1 的槽位唯一。
+// ensureUniquePriorities 保证跨账号全局启用态 priority>=1 的槽位唯一。
 // 参与者包括：本轮 fresh 正额度、以及仍占用正优先级的无 fresh 同伴（历史局部写回残留）。
 // 不改写 disabled 或 priority<=0（含 depleted -1）的凭证。
-func ensureUniqueProviderPriorities(items []PlanItem, options Options) {
-	order := make([]core.Provider, 0)
-	seen := make(map[core.Provider]struct{})
-	groups := make(map[core.Provider][]int)
+func ensureUniquePriorities(items []PlanItem, options Options) {
+	group := make([]int, 0, len(items))
 	for index, item := range items {
 		if item.Disabled || item.Priority < 1 {
 			continue
@@ -464,66 +463,60 @@ func ensureUniqueProviderPriorities(items []PlanItem, options Options) {
 		if !xaiFreeParticipatesPriority(options) && isXAIFreePlanItem(item) {
 			continue
 		}
-		// 仅当本轮至少有一条同 provider 的 fresh 正额度证据时，才触发去重写回，
-		// 避免无探测的空跑改写全站优先级。
-		provider := planItemProvider(item)
-		if _, ok := seen[provider]; !ok {
-			seen[provider] = struct{}{}
-			order = append(order, provider)
-		}
-		groups[provider] = append(groups[provider], index)
+		group = append(group, index)
 	}
-	for _, provider := range order {
-		group := groups[provider]
-		if !providerGroupHasFreshPositive(items, group) {
+	if len(group) == 0 {
+		return
+	}
+	if !hasFreshPositive(items, group) {
+		return
+	}
+	if !hasPriorityCollision(items, group) && !needsStartRealign(items, group, options) {
+		return
+	}
+	slices.SortStableFunc(group, func(left int, right int) int {
+		return compareUniquenessCandidates(items[left], items[right], options)
+	})
+	boosted := make(map[int]struct{}, len(group))
+	assigned := make(map[int]int, len(group))
+	used := make(map[int]struct{}, len(group))
+	boostPriority := maxEnabledPriority
+	for _, itemIndex := range group {
+		if !items[itemIndex].EvidenceFresh || resetBoost(items[itemIndex], options) <= 0 {
 			continue
 		}
-		if !providerGroupHasPriorityCollision(items, group) && !providerGroupNeedsStartRealign(items, group, options) {
-			// 无碰撞且已从 start 对齐时仍可能因局部写回导致「全员 start」；
-			// providerGroupHasPriorityCollision 已覆盖重复值；此处保留 full re-pack 仅在有碰撞时。
-			continue
-		}
-		slices.SortStableFunc(group, func(left int, right int) int {
-			return compareUniquenessCandidates(items[left], items[right], options)
-		})
-		boosted := make(map[int]struct{}, len(group))
-		assigned := make(map[int]int, len(group))
-		used := make(map[int]struct{}, len(group))
-		boostPriority := maxEnabledPriority
-		for _, itemIndex := range group {
-			if !items[itemIndex].EvidenceFresh || resetBoost(items[itemIndex], options) <= 0 {
-				continue
-			}
-			boosted[itemIndex] = struct{}{}
-			nextPriority := nextAvailablePriority(boostPriority, used)
+		boosted[itemIndex] = struct{}{}
+		nextPriority := nextAvailablePriority(boostPriority, used)
+		assigned[itemIndex] = nextPriority
+		used[nextPriority] = struct{}{}
+		boostPriority = nextPriority - 1
+	}
+	startPriority := normalizedMaxPriority(options.MaxPriority)
+	if startPriority < 1 {
+		startPriority = 100
+	}
+	priority := startPriority
+	for _, itemIndex := range group {
+		if _, isBoosted := boosted[itemIndex]; !isBoosted {
+			nextPriority := nextAvailablePriority(priority, used)
 			assigned[itemIndex] = nextPriority
 			used[nextPriority] = struct{}{}
-			boostPriority = nextPriority - 1
 		}
-		priority := startPriorityForProvider(provider, options)
-		for _, itemIndex := range group {
-			if _, isBoosted := boosted[itemIndex]; !isBoosted {
-				nextPriority := nextAvailablePriority(priority, used)
-				assigned[itemIndex] = nextPriority
-				used[nextPriority] = struct{}{}
-			}
-			priority--
-			if priority < 1 {
-				priority = 1
-			}
+		priority--
+		if priority < 1 {
+			priority = 1
 		}
-		for _, itemIndex := range group {
-			// resetBoost 999 仅保留给有 fresh 的 boost 项；无 fresh 同伴不得继承 999。
-			nextPriority := assigned[itemIndex]
-			if items[itemIndex].Priority != nextPriority {
-				if !items[itemIndex].EvidenceFresh {
-					items[itemIndex].ForceWrite = true
-					items[itemIndex].Reason = "provider priority uniqueness"
-				} else if items[itemIndex].Reason == "keep current state" || items[itemIndex].Reason == "" {
-					items[itemIndex].Reason = "provider priority uniqueness"
-				}
-				items[itemIndex].Priority = nextPriority
+	}
+	for _, itemIndex := range group {
+		nextPriority := assigned[itemIndex]
+		if items[itemIndex].Priority != nextPriority {
+			if !items[itemIndex].EvidenceFresh {
+				items[itemIndex].ForceWrite = true
+				items[itemIndex].Reason = "priority uniqueness"
+			} else if items[itemIndex].Reason == "keep current state" || items[itemIndex].Reason == "" {
+				items[itemIndex].Reason = "priority uniqueness"
 			}
+			items[itemIndex].Priority = nextPriority
 		}
 	}
 }
@@ -543,7 +536,7 @@ func nextAvailablePriority(preferred int, used map[int]struct{}) int {
 	return 1
 }
 
-func providerGroupHasFreshPositive(items []PlanItem, group []int) bool {
+func hasFreshPositive(items []PlanItem, group []int) bool {
 	for _, index := range group {
 		item := items[index]
 		if item.EvidenceFresh && item.Remaining != nil && *item.Remaining > 0 {
@@ -556,7 +549,7 @@ func providerGroupHasFreshPositive(items []PlanItem, group []int) bool {
 	return false
 }
 
-func providerGroupHasPriorityCollision(items []PlanItem, group []int) bool {
+func hasPriorityCollision(items []PlanItem, group []int) bool {
 	seen := make(map[int]struct{}, len(group))
 	for _, index := range group {
 		priority := items[index].Priority
@@ -590,7 +583,7 @@ func capExcludedXAIFreePriorities(items []PlanItem, options Options) {
 	}
 }
 
-func providerGroupNeedsStartRealign(items []PlanItem, group []int, options Options) bool {
+func needsStartRealign(items []PlanItem, group []int, options Options) bool {
 	// 预留：当前仅在碰撞时 re-pack；保留钩子便于后续策略扩展。
 	_ = options
 	_ = items
