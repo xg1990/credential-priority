@@ -101,8 +101,8 @@ func ParseClaudeUsage(raw []byte, headers host.Header, observedAt time.Time) Pro
 
 	// 3. 检查是否为 /v1/models 响应（官方 API 凭据有效性证据）
 	if len(usage.Data) > 0 {
-		// 默认 5 小时后刷新，假定额度可用（100）
-		defaultReset := observedAt.UTC().Add(5 * time.Hour)
+		// 默认 7 天（周窗口）后刷新，假定额度可用（100）
+		defaultReset := observedAt.UTC().Add(7 * 24 * time.Hour)
 		planType := core.PlanTypePro
 		orgUUID := usage.UUID
 		if orgUUID == "" {
@@ -111,7 +111,7 @@ func ParseClaudeUsage(raw []byte, headers host.Header, observedAt time.Time) Pro
 		if orgUUID == "" {
 			orgUUID = orgUUIDFromHeader
 		}
-		return makeReadyResult(observedAt, &defaultReset, 100, WindowFiveHour, nil, planType, orgUUID)
+		return makeReadyResult(observedAt, &defaultReset, 100, WindowWeekly, &defaultReset, planType, orgUUID)
 	}
 
 	return failedResult(observedAt, "trusted claude quota window unavailable")
@@ -130,15 +130,27 @@ func parseSingleUsage(usage claudeUsageResponse, observedAt time.Time) (ProbeRes
 		}
 	}
 
+	if usage.Weekly != nil || usage.FiveHour != nil || usage.SessionLimit != nil {
+		limits := claudeRateLimits{
+			Weekly:       usage.Weekly,
+			FiveHour:     usage.FiveHour,
+			SessionLimit: usage.SessionLimit,
+			Daily:        usage.Daily,
+		}
+		if win, ok := pickFromRateLimits(limits, observedAt); ok {
+			return makeReadyResult(observedAt, win.resetAt, win.remaining, win.windowType, win.longWindowResetAt, planType, orgUUID), true
+		}
+	}
+
 	for _, candidate := range []struct {
 		win  *claudeWindow
 		wtyp WindowType
 	}{
-		{usage.FiveHour, WindowFiveHour},
-		{usage.SessionLimit, WindowFiveHour},
 		{usage.Weekly, WindowWeekly},
 		{usage.Daily, WindowDaily},
-		{&usage.claudeWindow, WindowFiveHour},
+		{usage.FiveHour, WindowFiveHour},
+		{usage.SessionLimit, WindowFiveHour},
+		{&usage.claudeWindow, WindowWeekly},
 	} {
 		if candidate.win != nil && hasWindowData(*candidate.win) {
 			resetAt := windowResetTime(observedAt, *candidate.win)
@@ -202,20 +214,23 @@ func pickFromRateLimits(limits claudeRateLimits, observedAt time.Time) (effectiv
 
 	if okFive && okWeek && fiveHourReset != nil && weeklyReset != nil {
 		if weeklyRem <= 0 {
-			return effectiveWindow{resetAt: weeklyReset, remaining: 0, windowType: WindowWeekly}, true
+			return effectiveWindow{resetAt: weeklyReset, remaining: 0, windowType: WindowWeekly, longWindowResetAt: weeklyReset}, true
+		}
+		if fiveHourRem <= 0 {
+			return effectiveWindow{resetAt: fiveHourReset, remaining: 0, windowType: WindowFiveHour, longWindowResetAt: weeklyReset}, true
 		}
 		return effectiveWindow{
-			resetAt:           fiveHourReset,
-			remaining:         fiveHourRem,
-			windowType:        WindowFiveHour,
+			resetAt:           weeklyReset,
+			remaining:         weeklyRem,
+			windowType:        WindowWeekly,
 			longWindowResetAt: weeklyReset,
 		}, true
 	}
-	if okFive && fiveHourReset != nil {
-		return effectiveWindow{resetAt: fiveHourReset, remaining: fiveHourRem, windowType: WindowFiveHour}, true
-	}
 	if okWeek && weeklyReset != nil {
 		return effectiveWindow{resetAt: weeklyReset, remaining: weeklyRem, windowType: WindowWeekly, longWindowResetAt: weeklyReset}, true
+	}
+	if okFive && fiveHourReset != nil {
+		return effectiveWindow{resetAt: fiveHourReset, remaining: fiveHourRem, windowType: WindowFiveHour}, true
 	}
 
 	return effectiveWindow{}, false

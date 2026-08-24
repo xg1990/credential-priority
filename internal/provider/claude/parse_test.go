@@ -47,7 +47,6 @@ func TestParseClaudeUsage_StandardSessionLimit(t *testing.T) {
 
 func TestParseClaudeUsage_FiveHourAndWeeklyWindows(t *testing.T) {
 	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
-	fiveHourReset := time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC)
 	weeklyReset := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
 
 	payload := `{
@@ -70,14 +69,14 @@ func TestParseClaudeUsage_FiveHourAndWeeklyWindows(t *testing.T) {
 	if result.Status != StatusReady {
 		t.Fatalf("expected StatusReady, got %v", result.Status)
 	}
-	if result.Window != WindowFiveHour {
-		t.Errorf("expected WindowFiveHour, got %v", result.Window)
+	if result.Window != WindowWeekly {
+		t.Errorf("expected WindowWeekly, got %v", result.Window)
 	}
-	if result.Remaining == nil || *result.Remaining != 30 {
-		t.Errorf("expected remaining 30, got %v", result.Remaining)
+	if result.Remaining == nil || *result.Remaining != 400 {
+		t.Errorf("expected remaining 400, got %v", result.Remaining)
 	}
-	if result.ResetAt == nil || !result.ResetAt.Equal(fiveHourReset) {
-		t.Errorf("expected resetAt %v, got %v", fiveHourReset, result.ResetAt)
+	if result.ResetAt == nil || !result.ResetAt.Equal(weeklyReset) {
+		t.Errorf("expected resetAt %v, got %v", weeklyReset, result.ResetAt)
 	}
 	if result.LongWindowResetAt == nil || !result.LongWindowResetAt.Equal(weeklyReset) {
 		t.Errorf("expected LongWindowResetAt %v, got %v", weeklyReset, result.LongWindowResetAt)
