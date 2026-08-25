@@ -32,41 +32,41 @@ var ErrInvalidConfig = errors.New("config: invalid")
 // （调度使用 Interval 与 ActiveGroupSize）。
 // 探测缓存路径与 freshness TTL 为包内常量，不暴露为可配置字段。
 type Config struct {
-	Enabled               bool
-	AutoApply             bool
-	ProviderScope         ProviderScope
-	SelectedProviders     []string
-	AntigravityModelGroup AntigravityModelGroup
-	Interval              time.Duration
-	ImmediateProbeLimit   int
-	MaxConcurrency        int
-	MinChange             int
-	TopPriorityProbeCount int
-	ActiveGroupSize       int
-	ActiveGroupJitter     time.Duration
+	Enabled               bool                  `json:"enabled"`
+	AutoApply             bool                  `json:"auto_apply"`
+	ProviderScope         ProviderScope         `json:"provider_scope"`
+	SelectedProviders     []string              `json:"selected_providers"`
+	AntigravityModelGroup AntigravityModelGroup `json:"antigravity_model_group"`
+	Interval              time.Duration         `json:"interval"`
+	ImmediateProbeLimit   int                   `json:"immediate_probe_limit"`
+	MaxConcurrency        int                   `json:"max_concurrency"`
+	MinChange             int                   `json:"min_change"`
+	TopPriorityProbeCount int                   `json:"top_priority_probe_count"`
+	ActiveGroupSize       int                   `json:"active_group_size"`
+	ActiveGroupJitter     time.Duration         `json:"active_group_jitter"`
 	// DisabledGroupSize 兼容旧键 disabled_group_size；不再驱动调度。
-	DisabledGroupSize int
+	DisabledGroupSize int `json:"disabled_group_size"`
 	// DisabledProbeInterval 兼容旧键 disabled_probe_interval；不再驱动 1h 冷冻调度。
-	DisabledProbeInterval time.Duration
-	ProviderOverrides     map[string]ProviderOverride
-	PriorityRules         PriorityRules
+	DisabledProbeInterval time.Duration               `json:"disabled_probe_interval"`
+	ProviderOverrides     map[string]ProviderOverride `json:"provider_overrides,omitempty"`
+	PriorityRules         PriorityRules               `json:"priority_rules"`
 }
 
 // ProviderOverride 是按 provider 覆盖的可选配置。
 type ProviderOverride struct {
-	Enabled        *bool
-	AutoApply      *bool
-	Interval       time.Duration
-	MaxConcurrency int
+	Enabled        *bool         `json:"enabled,omitempty"`
+	AutoApply      *bool         `json:"auto_apply,omitempty"`
+	Interval       time.Duration `json:"interval,omitempty"`
+	MaxConcurrency int           `json:"max_concurrency,omitempty"`
 }
 
 // PriorityRules 是管理页可编辑的 provider 独立排序规则草稿。
 type PriorityRules struct {
-	Enabled     bool
-	Antigravity AntigravityPriorityRules
-	Codex       CodexPriorityRules
-	Claude      ClaudePriorityRules
-	XAI         XAIPriorityRules
+	Enabled     bool                     `json:"enabled"`
+	Antigravity AntigravityPriorityRules `json:"antigravity"`
+	Codex       CodexPriorityRules       `json:"codex"`
+	Claude      ClaudePriorityRules      `json:"claude"`
+	XAI         XAIPriorityRules         `json:"xai"`
 }
 
 // AntigravityPriorityRules 是 Antigravity 排序规则的可配置部分。
@@ -75,29 +75,29 @@ type AntigravityPriorityRules struct {
 
 // CodexPriorityRules 是 Codex 排序规则的可配置部分。
 type CodexPriorityRules struct {
-	FreeDepletedPriority int
-	FreeDepletedDisabled bool
+	FreeDepletedPriority int  `json:"free_depleted_priority"`
+	FreeDepletedDisabled bool `json:"free_depleted_disabled"`
 	// PaidDepletedDisabled：Plus/Pro/Team 耗尽时是否禁用；true=禁用，false=保持启用。
-	PaidDepletedDisabled bool
+	PaidDepletedDisabled bool `json:"paid_depleted_disabled"`
 }
 
 // ClaudePriorityRules 是 Claude 排序规则的可配置部分。
 type ClaudePriorityRules struct {
-	FreeDepletedPriority int
-	FreeDepletedDisabled bool
+	FreeDepletedPriority int  `json:"free_depleted_priority"`
+	FreeDepletedDisabled bool `json:"free_depleted_disabled"`
 	// PaidDepletedDisabled：Pro/Team 耗尽时是否禁用；true=禁用，false=保持启用。
-	PaidDepletedDisabled bool
+	PaidDepletedDisabled bool `json:"paid_depleted_disabled"`
 }
 
 // XAIPriorityRules 是 xAI 排序规则的可配置部分。
 type XAIPriorityRules struct {
-	FreeDepletedPriority int
-	FreeDepletedDisabled bool
+	FreeDepletedPriority int  `json:"free_depleted_priority"`
+	FreeDepletedDisabled bool `json:"free_depleted_disabled"`
 	// FreeParticipatesPriority：true 时 free 参与正优先级/free-first；false（默认）时仅保留耗尽/冷却/401。
-	FreeParticipatesPriority         bool
-	WeeklyDepletedPriority           int
-	MonthlyAndWeeklyDepletedPriority int
-	MonthlyAndWeeklyDepletedDisabled bool
+	FreeParticipatesPriority         bool `json:"free_participates_priority"`
+	WeeklyDepletedPriority           int  `json:"weekly_depleted_priority"`
+	MonthlyAndWeeklyDepletedPriority int  `json:"monthly_and_weekly_depleted_priority"`
+	MonthlyAndWeeklyDepletedDisabled bool `json:"monthly_and_weekly_depleted_disabled"`
 }
 
 type rawConfig struct {

@@ -13,6 +13,7 @@ import (
 
 	"credential-priority/internal/apply"
 	"credential-priority/internal/config"
+	"credential-priority/internal/host"
 	"credential-priority/internal/management"
 )
 
@@ -298,6 +299,14 @@ func (r managementRunner) Diagnostics(ctx context.Context) (map[string]any, erro
 		"last_result":  result,
 		"run_history":  r.runtime.currentRunHistory(),
 	}, nil
+}
+
+func (r managementRunner) Config(ctx context.Context) (config.Config, error) {
+	return r.runtime.Config()
+}
+
+func (r managementRunner) CredentialFiles(ctx context.Context) ([]host.AuthFile, error) {
+	return r.runtime.ListAuthFiles(ctx)
 }
 
 var _ management.Runner = managementRunner{}

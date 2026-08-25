@@ -30,6 +30,8 @@ type Runner interface {
 	Status(ctx context.Context) (StatusInfo, error)
 	LatestSnapshot(ctx context.Context) (apply.PlanSnapshot, error)
 	Diagnostics(ctx context.Context) (map[string]any, error)
+	Config(ctx context.Context) (config.Config, error)
+	CredentialFiles(ctx context.Context) ([]host.AuthFile, error)
 }
 
 // RunRequest 是资源页触发手动排序时的已解析请求。
@@ -90,15 +92,55 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleStatus 返回静态 HTML 壳（Key 验证 + 只读概览/配置展示 + 手动排序入口）。
-// 不在服务端注入动态业务数据；只读数据与 run 均由浏览器调用 management 路径完成。
+// handleStatus 返回 HTML 壳，并将 config/凭证统计/diagnostics 三份只读数据
+// 以服务端内嵌的方式写入页面，浏览器侧不再对 /v0/management/* 发起 fetch。
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
+	payload, err := json.Marshal(h.buildBootstrap(r.Context()))
+	if err != nil {
+		payload = []byte("null")
+	}
+	html := strings.Replace(StatusHTML, "__CREDENTIAL_PRIORITY_BOOTSTRAP_JSON__", string(payload), 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write([]byte(StatusHTML)); err != nil {
+	if _, err := w.Write([]byte(html)); err != nil {
 		// 响应已开始写入时无法再改状态码，仅尽量结束。
 		return
 	}
+}
+
+// bootstrapCredentialFile 是内嵌到 status 页面的凭证条目视图，仅保留分组统计所需字段，
+// 不含 account/email 等身份信息（该页面无需 management key 即可访问）。
+type bootstrapCredentialFile struct {
+	Provider string `json:"provider"`
+}
+
+type bootstrapCredentialSummary struct {
+	Files []bootstrapCredentialFile `json:"files"`
+}
+
+type statusBootstrap struct {
+	Config            config.Config              `json:"config"`
+	CredentialSummary bootstrapCredentialSummary `json:"credential_summary"`
+	Diagnostics       map[string]any             `json:"diagnostics"`
+}
+
+// buildBootstrap 汇总三份只读数据；任一数据源出错时该字段保持零值，不影响其余部分渲染，
+// 也不向未认证访问者暴露内部错误细节。
+func (h *Handler) buildBootstrap(ctx context.Context) statusBootstrap {
+	var data statusBootstrap
+	if cfg, err := h.runner.Config(ctx); err == nil {
+		data.Config = cfg
+	}
+	if files, err := h.runner.CredentialFiles(ctx); err == nil {
+		data.CredentialSummary.Files = make([]bootstrapCredentialFile, len(files))
+		for i, f := range files {
+			data.CredentialSummary.Files[i] = bootstrapCredentialFile{Provider: f.Provider}
+		}
+	}
+	if diag, err := h.runner.Diagnostics(ctx); err == nil {
+		data.Diagnostics = redactMap(diag)
+	}
+	return data
 }
 
 func (h *Handler) handleRun(w http.ResponseWriter, r *http.Request) {

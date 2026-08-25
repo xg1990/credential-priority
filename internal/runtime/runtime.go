@@ -173,7 +173,7 @@ func registrationResult() RegisterResult {
 		SchemaVersion: 1,
 		Metadata: Metadata{
 			Name:             config.PluginID,
-			Version:          "1.3.4",
+			Version:          "1.3.6",
 			Author:           "CPA Plugins",
 			GitHubRepository: "https://github.com/xg1990/credential-priority",
 			Description:      "Fresh evidence based credential priority management API.",
@@ -379,6 +379,21 @@ func (r *Runtime) Config() (config.Config, error) {
 		return config.Config{}, ErrShutdown
 	}
 	return r.cfg, nil
+}
+
+// ListAuthFiles 通过 host callback（可信 RPC 通道，非 HTTP）获取当前凭证文件列表。
+func (r *Runtime) ListAuthFiles(ctx context.Context) ([]host.AuthFile, error) {
+	r.mu.Lock()
+	callbacks := r.hostCallbacks
+	shutdown := r.shutdown
+	r.mu.Unlock()
+	if shutdown {
+		return nil, ErrShutdown
+	}
+	if callbacks == nil {
+		return nil, nil
+	}
+	return callbacks.ListAuthFiles(ctx)
 }
 
 func (r *Runtime) replaceConfig(ctx context.Context, cfg config.Config) error {
