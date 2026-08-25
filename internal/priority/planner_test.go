@@ -58,11 +58,8 @@ func TestPlanFreshOnly_Claude_PositiveRemaining(t *testing.T) {
 	}
 
 	options := Options{
-		Now:         now,
-		MaxPriority: 100,
-		StartPriorityByProvider: map[core.Provider]int{
-			core.ProviderClaude: 100,
-		},
+		Now:              now,
+		MaxPriority:      100,
 		ResetBoostWithin: 24 * time.Hour,
 		ResetBoost:       50,
 	}
@@ -128,11 +125,8 @@ func TestPlanFreshOnly_Claude_NearResetBoost(t *testing.T) {
 	}
 
 	options := Options{
-		Now:         now,
-		MaxPriority: 100,
-		StartPriorityByProvider: map[core.Provider]int{
-			core.ProviderClaude: 100,
-		},
+		Now:              now,
+		MaxPriority:      100,
 		ResetBoostWithin: 24 * time.Hour,
 		ResetBoost:       50,
 	}
@@ -441,9 +435,6 @@ func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
 	options := Options{
 		Now:         now,
 		MaxPriority: 100,
-		StartPriorityByProvider: map[core.Provider]int{
-			core.ProviderClaude: 100,
-		},
 	}
 
 	plan := PlanFreshOnly(credentials, evidence, options)

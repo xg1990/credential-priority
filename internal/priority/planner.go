@@ -14,7 +14,6 @@ const maxEnabledPriority = 999
 type Options struct {
 	Now                        time.Time
 	MaxPriority                int
-	StartPriorityByProvider    map[core.Provider]int
 	CodexFreeDepletedPriority  *int
 	CodexFreeDepletedDisabled  *bool
 	CodexPaidDepletedDisabled  *bool
@@ -609,25 +608,6 @@ func compareUniquenessCandidates(left PlanItem, right PlanItem, options Options)
 	return cmp.Compare(left.Credential.AuthIndex, right.Credential.AuthIndex)
 }
 
-func providerCandidateGroups(items []PlanItem, candidates []int) [][]int {
-	order := make([]core.Provider, 0)
-	seen := make(map[core.Provider]struct{})
-	groups := make(map[core.Provider][]int)
-	for _, itemIndex := range candidates {
-		provider := planItemProvider(items[itemIndex])
-		if _, ok := seen[provider]; !ok {
-			seen[provider] = struct{}{}
-			order = append(order, provider)
-		}
-		groups[provider] = append(groups[provider], itemIndex)
-	}
-	result := make([][]int, 0, len(order))
-	for _, provider := range order {
-		result = append(result, groups[provider])
-	}
-	return result
-}
-
 func planItemProvider(item PlanItem) core.Provider {
 	if item.Credential.Provider != "" {
 		return item.Credential.Provider
@@ -832,15 +812,6 @@ func normalizedMaxPriority(maxPriority int) int {
 		return maxEnabledPriority
 	}
 	return maxPriority
-}
-
-func startPriorityForProvider(provider core.Provider, options Options) int {
-	if options.StartPriorityByProvider != nil {
-		if priority, ok := options.StartPriorityByProvider[provider]; ok {
-			return normalizedMaxPriority(priority)
-		}
-	}
-	return normalizedMaxPriority(options.MaxPriority)
 }
 
 func sortPlanItems(items []PlanItem) {

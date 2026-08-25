@@ -29,7 +29,7 @@ CLIProxyAPI (CPA) 凭证优先级自动调整插件。插件 ID、动态库基�
 - 通过宿主回调 `host.auth.list`、`host.auth.get`、`host.auth.get_runtime`、`host.auth.save` 复用 CPA 的凭证、代理和写入链路。
 - 只对本轮最新且可用的探测证据生成排序变更，避免用过期缓存调整凭证状态。
 - 当前支持 Antigravity、Codex 与 xAI 凭证；后续可扩展其他提供商配置。
-- 不同提供商的排序规则彼此独立，Antigravity、Codex 与 xAI 不共享起始优先级或额度耗尽策略。
+- 不同提供商的排序规则彼此独立，Antigravity、Codex 与 xAI 不共享额度耗尽策略。
 - 状态页、诊断、快照与日志只输出脱敏后的凭证信息。
 - **自动优先级与规则**通过 CPA **插件管理可视化配置字段**（`ConfigFields`）编辑；也可直接改 `config.yaml` / `plugins.configs.credential-priority`。
 - **插件页**支持 Management Key 验证、概览（只读生效配置）、执行记录（近 5 次）、帮助，以及手动 apply（management 路径）；**不在插件页内保存配置**。
@@ -100,20 +100,16 @@ plugins:
       antigravity_model_group: "gemini"
       priority_rules:
         enabled: false
-        antigravity:
-          start_priority: 100
+        antigravity: {}
         codex:
-          start_priority: 100
           free_depleted_priority: -1
           free_depleted_disabled: true
           paid_depleted_disabled: false
         claude:
-          start_priority: 100
           free_depleted_priority: -1
           free_depleted_disabled: true
           paid_depleted_disabled: false
         xai:
-          start_priority: 100
           free_depleted_priority: -1
           free_depleted_disabled: false
           weekly_depleted_priority: -1
@@ -134,26 +130,23 @@ plugins:
 | `interval` | 自动排序/探测分批时间步长（默认 15m）。disabled 凭证分批递进也使用该间隔（不再使用固定 1h 冷冻）。 |
 | `immediate_probe_limit` / `active_group_size` | 控制本轮立即探测数量与 active 分批大小；disabled 分批组大小与 active 共用 `active_group_size`。 |
 
-> **配置要点**（用户向）：支持扁平 `priority_rules.*` 配置；打开 `priority_rules.enabled` 后各提供商 `start_priority` 才会按你的值生效。禁用/耗尽凭证不再固定等 1 小时，节奏跟 `interval` 与分批参数走。临近额度刷新约 24 小时内且仍有额度时优先用完（Antigravity/Codex/Claude 以及 OAuth 付费 xAI 官方周长窗适用，xAI 免费不参与）。
+> **配置要点**（用户向）：支持扁平 `priority_rules.*` 配置；优先级完全由跨提供商统一的节奏算法（PacingScore）全局计算，不存在按提供商单独生效的起始优先级。`priority_rules.enabled` 控制额度耗尽等策略字段是否生效。禁用/耗尽凭证不再固定等 1 小时，节奏跟 `interval` 与分批参数走。临近额度刷新约 24 小时内且仍有额度时优先用完（Antigravity/Codex/Claude 以及 OAuth 付费 xAI 官方周长窗适用，xAI 免费不参与）。
 
 ### 提供商独立排序规则
 
 Antigravity 规则
 
-- `priority_rules.antigravity.start_priority`：可用凭证的起始优先级，默认 `100`。
 - 只排序本轮成功获取到所选模型组配额的 Antigravity 凭证。
 - 配额获取失败或剩余额度不可用时保留当前优先级与启用状态。
 
 Codex 规则
 
-- `priority_rules.codex.start_priority`：可用凭证的起始优先级，默认 `100`。
 - `priority_rules.codex.free_depleted_priority`：Free 凭证额度为 0 时写入的优先级，默认 `-1`。
 - `priority_rules.codex.free_depleted_disabled`：Free 凭证额度为 0 时是否禁用，默认 `true`。
 - `priority_rules.codex.paid_depleted_disabled`：Plus、Pro、Team 额度耗尽时是否禁用；`true`=禁用，`false`=保持启用，默认 `false`。兼容旧键 `paid_depleted_keeps_enabled`（语义取反）。
 
 Claude 规则
 
-- `priority_rules.claude.start_priority`：可用凭证的起始优先级，默认 `100`。
 - `priority_rules.claude.free_depleted_priority`：Free 凭证额度为 0 时写入的优先级，默认 `-1`。
 - `priority_rules.claude.free_depleted_disabled`：Free 凭证额度为 0 时是否禁用，默认 `true`。
 - `priority_rules.claude.paid_depleted_disabled`：Pro、Team 额度耗尽时是否禁用；`true`=禁用，`false`=保持启用，默认 `false`。
@@ -182,7 +175,6 @@ xAI 规则
 
 **配置字段**
 
-- `priority_rules.xai.start_priority`：可用凭证的起始优先级，默认 `100`。
 - `priority_rules.xai.free_depleted_priority`：免费额度耗尽（软禁用）时写入的优先级，默认 `-1`。
 - `priority_rules.xai.free_depleted_disabled`：免费额度耗尽时是否硬禁用，默认 `false`（软禁用：仅降 priority）。
 - `priority_rules.xai.free_participates_priority`：Free 是否参与正优先级排序 / free-first，默认 `false`；显式 `true` 才 opt-in。关闭时不影响 429 耗尽、冷却与 401。

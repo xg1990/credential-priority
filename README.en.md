@@ -23,7 +23,7 @@ Credential Priority is a CLIProxyAPI (CPA) plugin that automatically adjusts cre
 - Reuses CPA credential, proxy, and write-back flows through `host.auth.list`, `host.auth.get`, `host.auth.get_runtime`, and `host.auth.save`.
 - Generates priority changes only from fresh and ready evidence collected in the current run.
 - Currently supports Antigravity, Codex, and xAI credentials; additional providers may be added later.
-- Provider rules are independent: Antigravity, Codex, and xAI do not share start priorities or depletion behavior.
+- Provider rules are independent: Antigravity, Codex, and xAI do not share depletion behavior.
 - Status pages, diagnostics, snapshots, and logs expose only redacted credential information.
 - **Automatic priority and rules** are edited via CPA **Plugin Manager visual ConfigFields** (recommended), or host `config.yaml` / `plugins.configs.credential-priority`.
 - **Plugin page** supports Management Key verification, overview (read-only effective config), run history (last 5), help, and manual apply (management routes). **It does not save config on the plugin page.**
@@ -94,20 +94,16 @@ plugins:
       antigravity_model_group: "gemini"
       priority_rules:
         enabled: false
-        antigravity:
-          start_priority: 100
+        antigravity: {}
         codex:
-          start_priority: 100
           free_depleted_priority: -1
           free_depleted_disabled: true
           paid_depleted_disabled: false
         claude:
-          start_priority: 100
           free_depleted_priority: -1
           free_depleted_disabled: true
           paid_depleted_disabled: false
         xai:
-          start_priority: 100
           free_depleted_priority: -1
           free_depleted_disabled: false
           weekly_depleted_priority: -1
@@ -126,26 +122,23 @@ plugins:
 | `interval` | Auto sort / probe batch step (default 15m). Disabled credentials also batch with this interval (no fixed 1h freeze). |
 | `immediate_probe_limit` / `active_group_size` | Immediate probe count and active batch size; disabled batches share `active_group_size` with active. |
 
-> **Configuration notes** (user-facing): Flat `priority_rules.*` keys are supported. Turn on `priority_rules.enabled` so each provider’s `start_priority` is applied. Disabled/depleted accounts no longer wait a fixed 1 hour—pacing follows `interval` and batch settings. Within ~24h of a quota reset, accounts with remaining quota are preferred (Antigravity/Codex/Claude and OAuth paid xAI weekly long-windows included; xAI free excluded).
+> **Configuration notes** (user-facing): Flat `priority_rules.*` keys are supported. Priority is determined entirely by the global, cross-provider pacing algorithm (PacingScore); there is no per-provider start-priority override. `priority_rules.enabled` controls whether depletion-related policy fields take effect. Disabled/depleted accounts no longer wait a fixed 1 hour—pacing follows `interval` and batch settings. Within ~24h of a quota reset, accounts with remaining quota are preferred (Antigravity/Codex/Claude and OAuth paid xAI weekly long-windows included; xAI free excluded).
 
 ### Provider-Independent Rules
 
 Antigravity rules
 
-- `priority_rules.antigravity.start_priority`: start priority for available credentials. Default: `100`.
 - Only credentials with fresh quota evidence for the selected Antigravity model group are sorted.
 - Failed quota fetches and unavailable remaining quota keep the current priority and enabled state.
 
 Codex rules
 
-- `priority_rules.codex.start_priority`: start priority for available credentials. Default: `100`.
 - `priority_rules.codex.free_depleted_priority`: priority for depleted Free credentials. Default: `-1`.
 - `priority_rules.codex.free_depleted_disabled`: disables depleted Free credentials. Default: `true`.
 - `priority_rules.codex.paid_depleted_disabled`: disable Plus/Pro/Team when depleted; `true`=disable, `false`=keep enabled. Default: `false`. Legacy `paid_depleted_keeps_enabled` is still accepted (inverted).
 
 Claude rules
 
-- `priority_rules.claude.start_priority`: start priority for available credentials. Default: `100`.
 - `priority_rules.claude.free_depleted_priority`: priority for depleted Free credentials. Default: `-1`.
 - `priority_rules.claude.free_depleted_disabled`: disables depleted Free credentials. Default: `true`.
 - `priority_rules.claude.paid_depleted_disabled`: disable Pro/Team when depleted; `true`=disable, `false`=keep enabled. Default: `false`.
@@ -174,7 +167,6 @@ xAI rules
 
 **Config fields**
 
-- `priority_rules.xai.start_priority`: start priority for available credentials. Default: `100`.
 - `priority_rules.xai.free_depleted_priority`: priority when free usage is depleted (soft-disable). Default: `-1`.
 - `priority_rules.xai.free_depleted_disabled`: hard-disables free usage depleted credentials. Default: `false` (soft-disable: lower priority only).
 - `priority_rules.xai.free_participates_priority`: whether Free joins positive priority sorting / free-first. Default: `false`; set `true` to opt in. When false, 429 depletion, cooldown, and 401 are unchanged.

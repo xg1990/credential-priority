@@ -191,7 +191,7 @@ func parseYAMLMap(data string) (map[string]any, error) {
 }
 
 // normalizePriorityRulesKeys 将顶层扁平键 priority_rules.* 折叠进嵌套 priority_rules。
-// 扁平叶子覆盖同路径嵌套值；不把 antigravity.start_priority 误当作 provider。
+// 扁平叶子覆盖同路径嵌套值；不把 codex.free_depleted_priority 误当作 provider。
 func normalizePriorityRulesKeys(root map[string]any) {
 	if root == nil {
 		return

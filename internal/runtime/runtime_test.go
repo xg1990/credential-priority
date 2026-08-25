@@ -54,7 +54,6 @@ provider_scope: "claude"
 priority_rules:
   enabled: true
   claude:
-    start_priority: 150
 `
 	res, err := rt.Register(context.Background(), RegisterRequest{ConfigYAML: cfgYAML})
 	if err != nil {
@@ -70,9 +69,6 @@ priority_rules:
 	}
 	if cfg.ProviderScope != config.ProviderScopeSelected {
 		t.Errorf("expected ProviderScopeSelected, got %v", cfg.ProviderScope)
-	}
-	if cfg.PriorityRules.Claude.StartPriority != 150 {
-		t.Errorf("expected Claude start priority 150, got %d", cfg.PriorityRules.Claude.StartPriority)
 	}
 
 	if err := rt.Shutdown(context.Background()); err != nil {

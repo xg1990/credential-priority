@@ -71,12 +71,10 @@ type PriorityRules struct {
 
 // AntigravityPriorityRules 是 Antigravity 排序规则的可配置部分。
 type AntigravityPriorityRules struct {
-	StartPriority int
 }
 
 // CodexPriorityRules 是 Codex 排序规则的可配置部分。
 type CodexPriorityRules struct {
-	StartPriority        int
 	FreeDepletedPriority int
 	FreeDepletedDisabled bool
 	// PaidDepletedDisabled：Plus/Pro/Team 耗尽时是否禁用；true=禁用，false=保持启用。
@@ -85,7 +83,6 @@ type CodexPriorityRules struct {
 
 // ClaudePriorityRules 是 Claude 排序规则的可配置部分。
 type ClaudePriorityRules struct {
-	StartPriority        int
 	FreeDepletedPriority int
 	FreeDepletedDisabled bool
 	// PaidDepletedDisabled：Pro/Team 耗尽时是否禁用；true=禁用，false=保持启用。
@@ -94,7 +91,6 @@ type ClaudePriorityRules struct {
 
 // XAIPriorityRules 是 xAI 排序规则的可配置部分。
 type XAIPriorityRules struct {
-	StartPriority        int
 	FreeDepletedPriority int
 	FreeDepletedDisabled bool
 	// FreeParticipatesPriority：true 时 free 参与正优先级/free-first；false（默认）时仅保留耗尽/冷却/401。
@@ -140,11 +136,9 @@ type rawPriorityRules struct {
 }
 
 type rawAntigravityPriority struct {
-	StartPriority *int `json:"start_priority"`
 }
 
 type rawCodexPriority struct {
-	StartPriority            *int  `json:"start_priority"`
 	FreeDepletedPriority     *int  `json:"free_depleted_priority"`
 	FreeDepletedDisabled     *bool `json:"free_depleted_disabled"`
 	PaidDepletedDisabled     *bool `json:"paid_depleted_disabled"`
@@ -152,7 +146,6 @@ type rawCodexPriority struct {
 }
 
 type rawClaudePriority struct {
-	StartPriority            *int  `json:"start_priority"`
 	FreeDepletedPriority     *int  `json:"free_depleted_priority"`
 	FreeDepletedDisabled     *bool `json:"free_depleted_disabled"`
 	PaidDepletedDisabled     *bool `json:"paid_depleted_disabled"`
@@ -160,7 +153,6 @@ type rawClaudePriority struct {
 }
 
 type rawXAIPriority struct {
-	StartPriority                    *int  `json:"start_priority"`
 	FreeDepletedPriority             *int  `json:"free_depleted_priority"`
 	FreeDepletedDisabled             *bool `json:"free_depleted_disabled"`
 	FreeParticipatesPriority         *bool `json:"free_participates_priority"`
@@ -283,24 +275,19 @@ func Default() Config {
 
 func defaultPriorityRules() PriorityRules {
 	return PriorityRules{
-		Enabled: false,
-		Antigravity: AntigravityPriorityRules{
-			StartPriority: 100,
-		},
+		Enabled:     false,
+		Antigravity: AntigravityPriorityRules{},
 		Codex: CodexPriorityRules{
-			StartPriority:        100,
 			FreeDepletedPriority: -1,
 			FreeDepletedDisabled: true,
 			PaidDepletedDisabled: false,
 		},
 		Claude: ClaudePriorityRules{
-			StartPriority:        100,
 			FreeDepletedPriority: -1,
 			FreeDepletedDisabled: true,
 			PaidDepletedDisabled: false,
 		},
 		XAI: XAIPriorityRules{
-			StartPriority:        100,
 			FreeDepletedPriority: -1,
 			// 方案 A：默认软禁用（仅降 priority），不 PatchDisabled。
 			FreeDepletedDisabled: false,
@@ -495,19 +482,10 @@ func (raw rawPriorityRules) apply(rules PriorityRules) (PriorityRules, error) {
 }
 
 func (raw rawAntigravityPriority) apply(rule AntigravityPriorityRules) (AntigravityPriorityRules, error) {
-	if raw.StartPriority != nil {
-		rule.StartPriority = *raw.StartPriority
-	}
-	if rule.StartPriority < 1 {
-		return AntigravityPriorityRules{}, invalid("priority_rules.antigravity.start_priority", fmt.Sprint(rule.StartPriority), "must be at least 1")
-	}
 	return rule, nil
 }
 
 func (raw rawCodexPriority) apply(rule CodexPriorityRules) (CodexPriorityRules, error) {
-	if raw.StartPriority != nil {
-		rule.StartPriority = *raw.StartPriority
-	}
 	if raw.FreeDepletedPriority != nil {
 		rule.FreeDepletedPriority = *raw.FreeDepletedPriority
 	}
@@ -519,17 +497,11 @@ func (raw rawCodexPriority) apply(rule CodexPriorityRules) (CodexPriorityRules, 
 		rule.PaidDepletedDisabled = *raw.PaidDepletedDisabled
 	} else if raw.PaidDepletedKeepsEnabled != nil {
 		rule.PaidDepletedDisabled = !*raw.PaidDepletedKeepsEnabled
-	}
-	if rule.StartPriority < 1 {
-		return CodexPriorityRules{}, invalid("priority_rules.codex.start_priority", fmt.Sprint(rule.StartPriority), "must be at least 1")
 	}
 	return rule, nil
 }
 
 func (raw rawClaudePriority) apply(rule ClaudePriorityRules) (ClaudePriorityRules, error) {
-	if raw.StartPriority != nil {
-		rule.StartPriority = *raw.StartPriority
-	}
 	if raw.FreeDepletedPriority != nil {
 		rule.FreeDepletedPriority = *raw.FreeDepletedPriority
 	}
@@ -542,16 +514,10 @@ func (raw rawClaudePriority) apply(rule ClaudePriorityRules) (ClaudePriorityRule
 	} else if raw.PaidDepletedKeepsEnabled != nil {
 		rule.PaidDepletedDisabled = !*raw.PaidDepletedKeepsEnabled
 	}
-	if rule.StartPriority < 1 {
-		return ClaudePriorityRules{}, invalid("priority_rules.claude.start_priority", fmt.Sprint(rule.StartPriority), "must be at least 1")
-	}
 	return rule, nil
 }
 
 func (raw rawXAIPriority) apply(rule XAIPriorityRules) (XAIPriorityRules, error) {
-	if raw.StartPriority != nil {
-		rule.StartPriority = *raw.StartPriority
-	}
 	if raw.FreeDepletedPriority != nil {
 		rule.FreeDepletedPriority = *raw.FreeDepletedPriority
 	}
@@ -569,9 +535,6 @@ func (raw rawXAIPriority) apply(rule XAIPriorityRules) (XAIPriorityRules, error)
 	}
 	if raw.MonthlyAndWeeklyDepletedDisabled != nil {
 		rule.MonthlyAndWeeklyDepletedDisabled = *raw.MonthlyAndWeeklyDepletedDisabled
-	}
-	if rule.StartPriority < 1 {
-		return XAIPriorityRules{}, invalid("priority_rules.xai.start_priority", fmt.Sprint(rule.StartPriority), "must be at least 1")
 	}
 	return rule, nil
 }

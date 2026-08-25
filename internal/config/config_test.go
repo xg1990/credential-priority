@@ -14,7 +14,6 @@ func TestLoadBytes_ClaudePriorityRules_JSON(t *testing.T) {
 		"priority_rules": {
 			"enabled": true,
 			"claude": {
-				"start_priority": 150,
 				"free_depleted_priority": -1,
 				"free_depleted_disabled": true,
 				"paid_depleted_disabled": false
@@ -45,9 +44,6 @@ func TestLoadBytes_ClaudePriorityRules_JSON(t *testing.T) {
 	if !cfg.PriorityRules.Enabled {
 		t.Errorf("expected PriorityRules.Enabled=true")
 	}
-	if cfg.PriorityRules.Claude.StartPriority != 150 {
-		t.Errorf("expected Claude.StartPriority=150, got %d", cfg.PriorityRules.Claude.StartPriority)
-	}
 	if cfg.PriorityRules.Claude.FreeDepletedPriority != -1 {
 		t.Errorf("expected Claude.FreeDepletedPriority=-1, got %d", cfg.PriorityRules.Claude.FreeDepletedPriority)
 	}
@@ -67,7 +63,6 @@ provider_scope: "antigravity|codex|claude|xai"
 priority_rules:
   enabled: true
   claude:
-    start_priority: 200
     free_depleted_priority: -1
     free_depleted_disabled: false
     paid_depleted_disabled: true
@@ -81,9 +76,6 @@ priority_rules:
 	if len(cfg.SelectedProviders) != 4 {
 		t.Fatalf("expected 4 selected providers, got %v", cfg.SelectedProviders)
 	}
-	if cfg.PriorityRules.Claude.StartPriority != 200 {
-		t.Errorf("expected Claude.StartPriority=200, got %d", cfg.PriorityRules.Claude.StartPriority)
-	}
 	if cfg.PriorityRules.Claude.FreeDepletedDisabled {
 		t.Errorf("expected Claude.FreeDepletedDisabled=false")
 	}
@@ -96,7 +88,6 @@ func TestLoadBytes_ClaudeLegacyKeepsEnabled(t *testing.T) {
 	configJSON := `{
 		"priority_rules": {
 			"claude": {
-				"start_priority": 100,
 				"paid_depleted_keeps_enabled": true
 			}
 		}
@@ -112,27 +103,10 @@ func TestLoadBytes_ClaudeLegacyKeepsEnabled(t *testing.T) {
 	}
 }
 
-func TestLoadBytes_InvalidStartPriority(t *testing.T) {
-	configJSON := `{
-		"priority_rules": {
-			"claude": {
-				"start_priority": 0
-			}
-		}
-	}`
-
-	_, err := LoadBytes([]byte(configJSON))
-	if err == nil {
-		t.Errorf("expected error for start_priority=0, got nil")
-	}
-}
-
 func TestLoadBytes_UnsupportedPriorityProvider(t *testing.T) {
 	configJSON := `{
 		"priority_rules": {
-			"unknown_provider": {
-				"start_priority": 100
-			}
+			"unknown_provider": {}
 		}
 	}`
 
