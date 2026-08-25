@@ -49,7 +49,7 @@ func (r *Runtime) runProductionTask(ctx context.Context, request TaskRequest) er
 	if err != nil {
 		return err
 	}
-	probes, err := probesForRequest(ctx, store, credentials, scheduleOptions(request.Config, now), request.AuthIndexes, request.Config.AntigravityModelGroup, request.Trigger)
+	probes, err := probesForRequest(ctx, store, credentials, scheduleOptions(request.Config, now), request.AuthIndexes, request.Config.AntigravityModelGroup, defaultProbeCacheTTL, request.Trigger)
 	if err != nil {
 		return err
 	}
@@ -149,7 +149,7 @@ func (r *Runtime) runAutoParallelProviders(ctx context.Context, request TaskRequ
 				evidenceChan <- providerEvidenceResult{provider: provider}
 				return
 			}
-			probes, err := probesForRequest(ctx, store, credentials, scheduleOptions(request.Config, now), request.AuthIndexes, request.Config.AntigravityModelGroup, TriggerAutoApply)
+			probes, err := probesForRequest(ctx, store, credentials, scheduleOptions(request.Config, now), request.AuthIndexes, request.Config.AntigravityModelGroup, defaultProbeCacheTTL, TriggerAutoApply)
 			if err != nil {
 				evidenceChan <- providerEvidenceResult{provider: provider, err: err}
 				return
@@ -368,7 +368,7 @@ func preserveProbeFailureState(plan priority.Plan, evidence []priority.ProbeEvid
 	return plan
 }
 
-func probesForRequest(ctx context.Context, store *state.Store, credentials []core.Credential, options schedule.Options, authIndexes []string, modelGroup config.AntigravityModelGroup, trigger Trigger) ([]schedule.Probe, error) {
+func probesForRequest(ctx context.Context, store *state.Store, credentials []core.Credential, options schedule.Options, authIndexes []string, modelGroup config.AntigravityModelGroup, cacheTTL time.Duration, trigger Trigger) ([]schedule.Probe, error) {
 	if trigger == TriggerManual || trigger == TriggerManualApply {
 		return probesAtCurrentTime(credentials, options.Clock.Now()), nil
 	}
@@ -377,17 +377,17 @@ func probesForRequest(ctx context.Context, store *state.Store, credentials []cor
 		if err != nil {
 			return nil, err
 		}
-		return dueProbes(ctx, store, probePlan, options.Clock.Now(), modelGroup)
+		return dueProbes(ctx, store, probePlan, options.Clock.Now(), modelGroup, cacheTTL)
 	}
 	return probesAtCurrentTime(credentials, options.Clock.Now()), nil
 }
 
-func dueProbes(ctx context.Context, store *state.Store, plan schedule.Plan, now time.Time, modelGroup config.AntigravityModelGroup) ([]schedule.Probe, error) {
+func dueProbes(ctx context.Context, store *state.Store, plan schedule.Plan, now time.Time, modelGroup config.AntigravityModelGroup, cacheTTL time.Duration) ([]schedule.Probe, error) {
 	result := make([]schedule.Probe, 0, len(plan.Immediate))
 	for _, probe := range plan.Immediate {
 		provider := filterProvider(probe.Credential)
 		groupName := probeModelGroup(provider, modelGroup)
-		needsProbe, err := store.NeedsProbe(ctx, state.ProbeCheck{AuthIndex: probe.Credential.AuthIndex, Provider: provider, ModelGroup: groupName, Now: now, Policy: state.ProbePolicy{}})
+		needsProbe, err := store.NeedsProbe(ctx, state.ProbeCheck{AuthIndex: probe.Credential.AuthIndex, Provider: provider, ModelGroup: groupName, Now: now, Policy: probePolicyForProvider(provider, cacheTTL)})
 		if err != nil {
 			return nil, err
 		}
@@ -400,7 +400,7 @@ func dueProbes(ctx context.Context, store *state.Store, plan schedule.Plan, now 
 			provider := filterProvider(probe.Credential)
 			groupName := probeModelGroup(provider, modelGroup)
 			if !probe.NextProbeAt.After(now) {
-				needsProbe, err := store.NeedsProbe(ctx, state.ProbeCheck{AuthIndex: probe.Credential.AuthIndex, Provider: provider, ModelGroup: groupName, Now: now, Policy: state.ProbePolicy{}})
+				needsProbe, err := store.NeedsProbe(ctx, state.ProbeCheck{AuthIndex: probe.Credential.AuthIndex, Provider: provider, ModelGroup: groupName, Now: now, Policy: probePolicyForProvider(provider, cacheTTL)})
 				if err != nil {
 					return nil, err
 				}
@@ -410,7 +410,7 @@ func dueProbes(ctx context.Context, store *state.Store, plan schedule.Plan, now 
 				continue
 			}
 			if store.HasEntry(probe.Credential.AuthIndex, groupName) {
-				needsProbe, err := store.NeedsProbe(ctx, state.ProbeCheck{AuthIndex: probe.Credential.AuthIndex, Provider: provider, ModelGroup: groupName, Now: now, Policy: state.ProbePolicy{}})
+				needsProbe, err := store.NeedsProbe(ctx, state.ProbeCheck{AuthIndex: probe.Credential.AuthIndex, Provider: provider, ModelGroup: groupName, Now: now, Policy: probePolicyForProvider(provider, cacheTTL)})
 				if err != nil {
 					return nil, err
 				}

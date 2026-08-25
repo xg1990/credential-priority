@@ -2,11 +2,16 @@ package runtime
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"credential-priority/internal/apply"
+	"credential-priority/internal/config"
 	"credential-priority/internal/core"
 	"credential-priority/internal/priority"
+	"credential-priority/internal/schedule"
+	"credential-priority/internal/state"
 )
 
 type recordingApplyHost struct {
@@ -112,5 +117,42 @@ func TestPreserveProbeFailureStateLeavesTrustedQuotaChange(t *testing.T) {
 	}
 	if len(plan.Changes) != 1 || plan.Changes[0].Credential.AuthIndex != trustedCredential.AuthIndex {
 		t.Fatalf("changes = %+v, want only trusted quota change", plan.Changes)
+	}
+}
+
+// TestDueProbesAppliesProviderPolicyTTL 回归覆盖：dueProbes（自动定时排序路径）必须把
+// probePolicyForProvider 算出的真实 TTL/ResetStaleAfter 传给 NeedsProbe，而不是空值 ProbePolicy{}。
+// 空值会让 isTTLExpired 恒为 false，退化为只看 NextProbeAt——而成功/失败探测都会把
+// NextProbeAt 设为 1 小时后，导致自动路径上的凭证探测一次后进入 1 小时黑窗期，
+// evidence 永远无法在 15 分钟 TTL 内刷新为 fresh（历史上曾导致 PacingScore 恒为 0）。
+func TestDueProbesAppliesProviderPolicyTTL(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	credential := core.Credential{AuthIndex: "claude-ttl-check", Provider: core.ProviderClaude}
+
+	store, err := state.Load(ctx, filepath.Join(t.TempDir(), "cache.json"))
+	if err != nil {
+		t.Fatalf("state.Load() error = %v", err)
+	}
+	// 20 分钟前探测成功：超过 15 分钟 TTL，但 NextProbeAt（观测时刻+1h）还没到。
+	observedAt := now.Add(-20 * time.Minute)
+	if err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{
+		AuthIndex:   credential.AuthIndex,
+		Provider:    credential.Provider,
+		ObservedAt:  observedAt,
+		Remaining:   100,
+		Source:      state.SourceFreshProbe,
+		NextProbeAt: observedAt.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("MarkProbeSuccess() error = %v", err)
+	}
+
+	plan := schedule.Plan{Immediate: []schedule.Probe{{Credential: credential, NextProbeAt: now}}}
+	probes, err := dueProbes(ctx, store, plan, now, config.AntigravityModelGroup(""), defaultProbeCacheTTL)
+	if err != nil {
+		t.Fatalf("dueProbes() error = %v", err)
+	}
+	if len(probes) != 1 {
+		t.Fatalf("dueProbes() = %d probes, want 1 (15m TTL must force re-probe even though NextProbeAt has not elapsed)", len(probes))
 	}
 }
