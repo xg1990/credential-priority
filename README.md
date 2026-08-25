@@ -6,6 +6,8 @@
 
 </div>
 
+> **本项目已迁移至 [xg1990/quota-pacer](https://github.com/xg1990/quota-pacer)。** 此仓库已归档，不再更新，请前往新仓库获取最新版本与插件商店地址。
+
 CLIProxyAPI (CPA) 凭证优先级自动调整插件。插件 ID、动态库基础名与 CPA 配置键均为 `credential-priority`。
 
 <div align="center">

@@ -6,6 +6,8 @@
 
 </div>
 
+> **This project has moved to [xg1990/quota-pacer](https://github.com/xg1990/quota-pacer).** This repository is archived and no longer updated; please use the new repository for the latest version and plugin store source.
+
 Credential Priority is a CLIProxyAPI (CPA) plugin that automatically adjusts credential priority. The plugin ID, dynamic library basename, and CPA configuration key are all `credential-priority`.
 
 ## Navigation
