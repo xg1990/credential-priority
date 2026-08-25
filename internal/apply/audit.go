@@ -3,6 +3,7 @@ package apply
 import (
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"credential-priority/internal/core"
 	"credential-priority/internal/host"
@@ -33,6 +34,13 @@ type SnapshotItem struct {
 	Target        Target `json:"target"`
 	EvidenceFresh bool   `json:"evidence_fresh"`
 	Reason        string `json:"reason"`
+	// PlanType/Remaining/ResetAt/LongWindowResetAt/PacingScore 是 pace 计算表格所需的原始输入与结果，
+	// 均为非敏感数值/枚举/时间字段，无需脱敏。
+	PlanType          string     `json:"plan_type"`
+	Remaining         *int64     `json:"remaining"`
+	ResetAt           *time.Time `json:"reset_at"`
+	LongWindowResetAt *time.Time `json:"long_window_reset_at"`
+	PacingScore       float64    `json:"pacing_score"`
 }
 
 // SnapshotChange 是单个写入候选的脱敏审计视图。
@@ -109,15 +117,20 @@ func newAuditEvent(plan priority.Plan) AuditEvent {
 func snapshotItem(item priority.PlanItem) SnapshotItem {
 	credential := item.Credential
 	return SnapshotItem{
-		Name:          redactString(credential.Name),
-		AuthIndex:     redactString(credential.AuthIndex),
-		Provider:      redactString(string(credential.Provider)),
-		Type:          redactString(string(credential.Type)),
-		Status:        redactString(string(credential.Status)),
-		Current:       target(credential.Priority, credential.Disabled),
-		Target:        target(item.Priority, item.Disabled),
-		EvidenceFresh: item.EvidenceFresh,
-		Reason:        redactString(item.Reason),
+		Name:              redactString(credential.Name),
+		AuthIndex:         redactString(credential.AuthIndex),
+		Provider:          redactString(string(credential.Provider)),
+		Type:              redactString(string(credential.Type)),
+		Status:            redactString(string(credential.Status)),
+		Current:           target(credential.Priority, credential.Disabled),
+		Target:            target(item.Priority, item.Disabled),
+		EvidenceFresh:     item.EvidenceFresh,
+		Reason:            redactString(item.Reason),
+		PlanType:          string(item.PlanType),
+		Remaining:         item.Remaining,
+		ResetAt:           item.ResetAt,
+		LongWindowResetAt: item.LongWindowResetAt,
+		PacingScore:       item.PacingScore,
 	}
 }
 

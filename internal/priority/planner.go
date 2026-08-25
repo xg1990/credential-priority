@@ -89,6 +89,8 @@ type PlanItem struct {
 	// ForceWrite 允许无本轮 fresh 证据的同伴因同 provider 优先级去重而写回宿主。
 	ForceWrite bool
 	Reason     string
+	// PacingScore 是排序时实际使用的 Pacing 健康度得分快照，供审计/展示使用。
+	PacingScore float64
 }
 
 // Change 表示需要由后续 apply writer 写回宿主的 fresh 证据变更。
@@ -115,6 +117,9 @@ func PlanFreshOnly(credentials []core.Credential, evidence []ProbeEvidence, opti
 	ensureUniquePriorities(items, options)
 	capExcludedXAIFreePriorities(items, options)
 	sortPlanItems(items)
+	for i := range items {
+		items[i].PacingScore = pacingScore(items[i], options.Now)
+	}
 	return Plan{Items: items, Changes: changes(items, options)}
 }
 
